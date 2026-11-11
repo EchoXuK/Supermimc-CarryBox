@@ -1,0 +1,19 @@
+{
+  "training_approach_clips": 118,
+  "first_grasp_root_box_xy_quantiles_m": [
+    0.39879235029220583,
+    0.45948144793510437,
+    0.5383568227291107
+  ],
+  "approach_mean_speed_quantiles_mps": [
+    0.125586,
+    0.29087,
+    0.38332
+  ],
+  "standoff_m": 0.6,
+  "closing_speed_cap_mps": 0.3,
+  "weight": 1.0,
+  "same_pre_transition_box_target": true,
+  "before_reference_grasp_only": true,
+  "common_task_metric_unchanged": true
+}

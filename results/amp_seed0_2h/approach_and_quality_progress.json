@@ -1,0 +1,132 @@
+[
+  {
+    "checkpoint": "ckpt_000000_val",
+    "task_return": 0.03606786951422691,
+    "long_passed": 0,
+    "long_completion": 0.11638165172189474,
+    "short_passed": 0,
+    "progress_reward": 0.007505530957132578,
+    "body_acc": 30.627672700032797,
+    "arms_acc": 31.36373338797321
+  },
+  {
+    "checkpoint": "ckpt_001729_val",
+    "task_return": 0.4100481867790222,
+    "long_passed": 0,
+    "long_completion": 0.6811565564324459,
+    "short_passed": 1,
+    "progress_reward": 0.0014706045622006059,
+    "body_acc": 40.97993253028556,
+    "arms_acc": 17.727138974078713
+  },
+  {
+    "checkpoint": "ckpt_003464_val",
+    "task_return": 0.5676877498626709,
+    "long_passed": 0,
+    "long_completion": 0.7330962776516875,
+    "short_passed": 4,
+    "progress_reward": 0.0027012936770915985,
+    "body_acc": 43.917405848633756,
+    "arms_acc": 16.378678868894706
+  },
+  {
+    "checkpoint": "ckpt_005209_val",
+    "task_return": 0.6048410534858704,
+    "long_passed": 1,
+    "long_completion": 0.7513839512442549,
+    "short_passed": 6,
+    "progress_reward": 0.004860899411141872,
+    "body_acc": 40.72317494594888,
+    "arms_acc": 13.365527809482732
+  },
+  {
+    "checkpoint": "ckpt_006967_val",
+    "task_return": 0.6155474781990051,
+    "long_passed": 1,
+    "long_completion": 0.750908887013793,
+    "short_passed": 6,
+    "progress_reward": 0.004308718256652355,
+    "body_acc": 32.94367444351928,
+    "arms_acc": 10.890225720732179
+  },
+  {
+    "checkpoint": "ckpt_008730_val",
+    "task_return": 0.6366249918937683,
+    "long_passed": 1,
+    "long_completion": 0.7561435401439667,
+    "short_passed": 8,
+    "progress_reward": 0.006278456188738346,
+    "body_acc": 39.11239746662035,
+    "arms_acc": 11.728113742723856
+  },
+  {
+    "checkpoint": "ckpt_010488_val",
+    "task_return": 0.616865336894989,
+    "long_passed": 0,
+    "long_completion": 0.7474502831076583,
+    "short_passed": 7,
+    "progress_reward": 0.005694945342838764,
+    "body_acc": 34.83167606673828,
+    "arms_acc": 11.482513231773899
+  },
+  {
+    "checkpoint": "ckpt_012246_val",
+    "task_return": 0.6403005719184875,
+    "long_passed": 2,
+    "long_completion": 0.785616859793663,
+    "short_passed": 8,
+    "progress_reward": 0.007723162416368723,
+    "body_acc": 27.90482011478241,
+    "arms_acc": 9.95458365139896
+  },
+  {
+    "checkpoint": "ckpt_014012_val",
+    "task_return": 0.6580413579940796,
+    "long_passed": 4,
+    "long_completion": 0.799063043979307,
+    "short_passed": 8,
+    "progress_reward": 0.007386545650660992,
+    "body_acc": 29.999139673089328,
+    "arms_acc": 10.917455841417182
+  },
+  {
+    "checkpoint": "ckpt_015764_val",
+    "task_return": 0.6590662002563477,
+    "long_passed": 1,
+    "long_completion": 0.6988029054676493,
+    "short_passed": 8,
+    "progress_reward": 0.006463708821684122,
+    "body_acc": 26.869387037133517,
+    "arms_acc": 10.483444491477862
+  },
+  {
+    "checkpoint": "ckpt_017465_val",
+    "task_return": 0.6736159920692444,
+    "long_passed": 3,
+    "long_completion": 0.8011241887385646,
+    "short_passed": 8,
+    "progress_reward": 0.006352716591209173,
+    "body_acc": 22.917458953922743,
+    "arms_acc": 9.652507478243685
+  },
+  {
+    "checkpoint": "ckpt_019170_val",
+    "task_return": 0.6590685844421387,
+    "long_passed": 2,
+    "long_completion": 0.76814237733682,
+    "short_passed": 8,
+    "progress_reward": 0.006422930862754583,
+    "body_acc": 27.27121291911765,
+    "arms_acc": 10.071499164790323
+  },
+  {
+    "checkpoint": "ckpt_020869_val",
+    "task_return": 0.6721717715263367,
+    "long_passed": 1,
+    "long_completion": 0.7591882958076894,
+    "short_passed": 8,
+    "progress_reward": 0.005859122145920992,
+    "body_acc": 22.063015937805176,
+    "arms_acc": 9.610671363464773
+  }
+]

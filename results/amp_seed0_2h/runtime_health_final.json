@@ -1,0 +1,22 @@
+{
+  "logged_iteration": 20850,
+  "early_20": {
+    "env_steps_per_s": 45591.37381672922,
+    "collect_ms": 258.1354495239258,
+    "wm_ms": 46.49019401550294,
+    "policy_ms": 31.067832412719728,
+    "peak_allocated_gb": 8.053082942962646,
+    "device_used_gb": 36.48004150390625
+  },
+  "latest_20": {
+    "env_steps_per_s": 46623.88522190858,
+    "collect_ms": 252.19587982177734,
+    "wm_ms": 45.51374839782715,
+    "policy_ms": 31.01353973388672,
+    "peak_allocated_gb": 8.053082942962646,
+    "device_used_gb": 36.48004150390625
+  },
+  "whole_run_median_steps_per_second": 46024.41340495825,
+  "nonfinite_updates": 0,
+  "source_hash_mismatches": []
+}

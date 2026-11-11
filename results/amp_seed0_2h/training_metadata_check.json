@@ -1,0 +1,15 @@
+{
+  "iteration": 20869,
+  "wall_seconds": 7200.127604961395,
+  "sim_steps": 320741376,
+  "amp_updates": 20869,
+  "seed": 0,
+  "resume": null,
+  "init_from": null,
+  "num_envs": 6144,
+  "goal_frames": 45,
+  "horizon": 32,
+  "vision": "latent",
+  "goal_anchor": "robot",
+  "progress_weight": 1.0
+}

@@ -1,0 +1,139 @@
+{
+  "validation": [
+    {
+      "minute": 0.0,
+      "iteration": 0,
+      "file": "ckpt_000000_val.json",
+      "carry_task_norm_return": 0.03606786951422691,
+      "completion_fraction": 0.055697087198495865,
+      "fail_rate": 1.0,
+      "mean_object_error_m": 0.041776545345783234,
+      "mean_control_penalty": 0.0384843535721302
+    },
+    {
+      "minute": 9.97788,
+      "iteration": 1729,
+      "file": "ckpt_001729_val.json",
+      "carry_task_norm_return": 0.4100481867790222,
+      "completion_fraction": 0.7419025301933289,
+      "fail_rate": 0.5547944903373718,
+      "mean_object_error_m": 0.16286931931972504,
+      "mean_control_penalty": 0.016974423080682755
+    },
+    {
+      "minute": 20.06652,
+      "iteration": 3464,
+      "file": "ckpt_003464_val.json",
+      "carry_task_norm_return": 0.5676877498626709,
+      "completion_fraction": 0.9020633101463318,
+      "fail_rate": 0.30821916460990906,
+      "mean_object_error_m": 0.11782330274581909,
+      "mean_control_penalty": 0.022640205919742584
+    },
+    {
+      "minute": 29.95266,
+      "iteration": 5209,
+      "file": "ckpt_005209_val.json",
+      "carry_task_norm_return": 0.6048410534858704,
+      "completion_fraction": 0.9156993627548218,
+      "fail_rate": 0.27397260069847107,
+      "mean_object_error_m": 0.0966779813170433,
+      "mean_control_penalty": 0.0222128015011549
+    },
+    {
+      "minute": 40.050360000000005,
+      "iteration": 6967,
+      "file": "ckpt_006967_val.json",
+      "carry_task_norm_return": 0.6155474781990051,
+      "completion_fraction": 0.9140830039978027,
+      "fail_rate": 0.27397260069847107,
+      "mean_object_error_m": 0.1031818687915802,
+      "mean_control_penalty": 0.018044233322143555
+    },
+    {
+      "minute": 49.972319999999996,
+      "iteration": 8730,
+      "file": "ckpt_008730_val.json",
+      "carry_task_norm_return": 0.6366249918937683,
+      "completion_fraction": 0.9293147921562195,
+      "fail_rate": 0.22602739930152893,
+      "mean_object_error_m": 0.082988440990448,
+      "mean_control_penalty": 0.021337775513529778
+    },
+    {
+      "minute": 60.0696,
+      "iteration": 10488,
+      "file": "ckpt_010488_val.json",
+      "carry_task_norm_return": 0.616865336894989,
+      "completion_fraction": 0.9181439280509949,
+      "fail_rate": 0.267123281955719,
+      "mean_object_error_m": 0.09248688071966171,
+      "mean_control_penalty": 0.019535714760422707
+    },
+    {
+      "minute": 70.0284,
+      "iteration": 12246,
+      "file": "ckpt_012246_val.json",
+      "carry_task_norm_return": 0.6403005719184875,
+      "completion_fraction": 0.9317978024482727,
+      "fail_rate": 0.232876718044281,
+      "mean_object_error_m": 0.07965300232172012,
+      "mean_control_penalty": 0.016578450798988342
+    },
+    {
+      "minute": 79.9362,
+      "iteration": 14012,
+      "file": "ckpt_014012_val.json",
+      "carry_task_norm_return": 0.6580413579940796,
+      "completion_fraction": 0.9608651995658875,
+      "fail_rate": 0.15753424167633057,
+      "mean_object_error_m": 0.0813257098197937,
+      "mean_control_penalty": 0.018354810774326324
+    },
+    {
+      "minute": 90.06360000000001,
+      "iteration": 15764,
+      "file": "ckpt_015764_val.json",
+      "carry_task_norm_return": 0.6590662002563477,
+      "completion_fraction": 0.9641410112380981,
+      "fail_rate": 0.1164383590221405,
+      "mean_object_error_m": 0.08441603183746338,
+      "mean_control_penalty": 0.015483424998819828
+    },
+    {
+      "minute": 100.0602,
+      "iteration": 17465,
+      "file": "ckpt_017465_val.json",
+      "carry_task_norm_return": 0.6736159920692444,
+      "completion_fraction": 0.9765039682388306,
+      "fail_rate": 0.09589041024446487,
+      "mean_object_error_m": 0.08612082153558731,
+      "mean_control_penalty": 0.01447860524058342
+    },
+    {
+      "minute": 110.031,
+      "iteration": 19170,
+      "file": "ckpt_019170_val.json",
+      "carry_task_norm_return": 0.6590685844421387,
+      "completion_fraction": 0.9656795263290405,
+      "fail_rate": 0.13013698160648346,
+      "mean_object_error_m": 0.09402035921812057,
+      "mean_control_penalty": 0.014952004887163639
+    },
+    {
+      "minute": 119.8986,
+      "iteration": 20869,
+      "file": "ckpt_020869_val.json",
+      "carry_task_norm_return": 0.6721717715263367,
+      "completion_fraction": 0.9740732312202454,
+      "fail_rate": 0.10958904027938843,
+      "mean_object_error_m": 0.08769617229700089,
+      "mean_control_penalty": 0.014774910174310207
+    }
+  ],
+  "nonfinite_updates": 0,
+  "actor_grad_min": 2.92396,
+  "actor_grad_max": 190.776,
+  "median_steps_per_s": 46026.447197580645,
+  "all_validation_reward_gradients_finite": true
+}

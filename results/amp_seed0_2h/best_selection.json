@@ -1,0 +1,8 @@
+{
+  "criterion": "maximum common carry_task_norm_return on all 146 validation clips",
+  "checkpoint": "checkpoints/amp_seed0_2h/best_policy.pt",
+  "validation": "results/amp_seed0_2h/validation_best.json",
+  "value": 0.6736159920692444,
+  "fail_rate": 0.09589041024446487,
+  "completion_fraction": 0.9765039682388306
+}

@@ -1,0 +1,70 @@
+{
+  "training": {
+    "iteration": 20869,
+    "wall_seconds": 7200.127604961395,
+    "sim_steps": 320741376,
+    "amp_updates": 20869,
+    "seed": 0,
+    "resume": null,
+    "init_from": null,
+    "num_envs": 6144,
+    "goal_frames": 45,
+    "horizon": 32,
+    "vision": "latent",
+    "goal_anchor": "robot",
+    "progress_weight": 1.0
+  },
+  "validation_best": {
+    "carry_task_norm_return": 0.6736159920692444,
+    "completion_fraction": 0.9765039682388306,
+    "fail_rate": 0.09589041024446487,
+    "mean_object_error_m": 0.08612082153558731,
+    "mean_control_penalty": 0.01447860524058342
+  },
+  "test": {
+    "carry_task_norm_return": 0.6497172117233276,
+    "completion_fraction": 0.9817026853561401,
+    "fail_rate": 0.08490566164255142,
+    "mean_object_error_m": 0.09751775115728378,
+    "mean_control_penalty": 0.01446426473557949
+  },
+  "long_approach_validation_passed": 3,
+  "long_approach_validation_total": 12,
+  "full_checkpoint": {
+    "iteration": 20869,
+    "training_wall_seconds": 7200.127604961395,
+    "complete": true,
+    "amp_updates": 20869,
+    "all_model_and_optimizer_tensors_finite": true
+  },
+  "reward_audit_samples": 1534,
+  "reward_audit_max_errors": {
+    "value_decomposition_max_error": 2.384185791015625e-07,
+    "gradient_decomposition_max_error": 4.76837158203125e-07,
+    "live_state_recompute_max_error": 4.252791404724121e-05
+  },
+  "resume": {
+    "source_iteration": 20869,
+    "restored_iteration": 20874,
+    "restored_amp_updates": 20874,
+    "kernel": "inverse_quadratic",
+    "all_model_and_optimizer_tensors_finite": true,
+    "nonfinite_updates": 0,
+    "actor_gradient_norms": [
+      13.9275,
+      9.39749,
+      5.29672,
+      6.07266,
+      6.51211
+    ],
+    "purpose": "Five-update restore validation only; these weights are not the delivered policy."
+  },
+  "onnx": {
+    "random_frames": 64,
+    "max_absolute_error": 6.68e-06,
+    "tolerance": 0.001,
+    "root_pos_w_tested": true,
+    "discriminator_required_for_inference": false
+  },
+  "all_work_complete": true
+}
