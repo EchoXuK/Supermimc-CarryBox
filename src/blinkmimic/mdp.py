@@ -114,9 +114,6 @@ class MDP:
         self.feet: list[int] = []
 
     # ---------------- observation ----------------
-    def goal(self, S, f, K) -> torch.Tensor:
-        return self.motion.goal(f, K)
-
     def obs(self, S, a_prev, xi, f) -> torch.Tensor:
         """Noise-free proprioceptive observation (+ reference-relative root orientation)."""
         p, R, v, w, q, qd = S
@@ -136,9 +133,13 @@ class MDP:
         ``w_contact`` > 0 adds the InstantTrack contact term: a smooth foot-contact indicator (ankle-roll
         origin below 4.5 cm) matched to the reference's contact state, plus low horizontal foot speed while
         the reference foot is down. Evaluation keeps ``w_contact = 0``, i.e. the paper's reward."""
+        return self.reward_from_kinematics(S, f, a, a_prev, self.kin.forward(*S[:6]), terms, w_contact)
+
+    def reward_from_kinematics(self, S, f, a, a_prev, bodies, terms=False, w_contact=0.):
+        """Reuse one FK pass for body, hand and sole rewards."""
         c, m = self.cfg, self.motion
         p, R, v, w, q, qd = S
-        bp, bR, bv, bw = self.kin.forward(p, R, v, w, q, qd)
+        bp, bR, bv, bw = bodies
         rp, rR = m.root_p[f], m.root_R[f]
         # reference bodies re-anchored to the robot's root (xy + yaw), as in BeyondMimic
         dR = yaw_mat(mm3(R, rR.transpose(-1, -2)))
@@ -162,6 +163,7 @@ class MDP:
         r_rate = ((a - a_prev) ** 2).sum(-1)
         r_lim = (torch.relu(q - self.soft_hi) + torch.relu(self.soft_lo - q)).sum(-1)
         r = (r_track + c.w_action_rate * r_rate + c.w_joint_limit * r_lim) * CONTROL_DT
+        foot_contact_reward = torch.zeros_like(r)
         if w_contact > 0:
             fz, rz = bp[..., self.feet, 2], m.body_p[f][..., self.feet, 2]
             c_sim = torch.sigmoid((CONTACT_Z - fz) / 0.005)
@@ -169,15 +171,25 @@ class MDP:
             c_ref = rc[f] if rc is not None else (rz < CONTACT_Z).float()
             slip = (bv[..., self.feet, :2] ** 2).sum(-1)
             r_contact = (1 - (c_sim - c_ref) ** 2) + c_ref * torch.exp(-slip / 0.3**2)
-            r = r + w_contact * r_contact.mean(-1) * CONTROL_DT
+            foot_contact_reward = w_contact * r_contact.mean(-1) * CONTROL_DT
+            r = r + foot_contact_reward
         if terms:
             return r, {
                 "track": r_track * CONTROL_DT,
+                "body_pos_reward": torch.exp(-e_pos / c.body_pos_std**2) * CONTROL_DT,
+                "body_ori_reward": torch.exp(-e_ori / c.body_ori_std**2) * CONTROL_DT,
+                "body_linvel_reward": torch.exp(-e_lv / c.body_linvel_std**2) * CONTROL_DT,
+                "body_angvel_reward": torch.exp(-e_av / c.body_angvel_std**2) * CONTROL_DT,
+                "root_pos_reward": .5 * torch.exp(-e_rp / c.root_pos_std**2) * CONTROL_DT,
+                "root_ori_reward": .5 * torch.exp(-e_ro / c.root_ori_std**2) * CONTROL_DT,
+                "action_rate_reward": c.w_action_rate * r_rate * CONTROL_DT,
+                "joint_limit_reward": c.w_joint_limit * r_lim * CONTROL_DT,
                 "e_body_pos": e_pos,
                 "e_body_ori": e_ori,
                 "e_root_pos": e_rp,
                 "action_rate": r_rate,
                 "joint_limit": r_lim,
+                "foot_contact_reward": foot_contact_reward,
             }
         return r
 

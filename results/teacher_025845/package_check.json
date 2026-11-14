@@ -1,0 +1,13 @@
+{
+  "source_files_exact": 53,
+  "robot_assets_exact": true,
+  "weights_bytes_exact": true,
+  "checkpoint_iteration": 25845,
+  "full_training_state_complete": true,
+  "cpu_actions_exact": true,
+  "cpu_rewards_exact": true,
+  "reward_terms_exact": 40,
+  "secret_scan_text_files": 94,
+  "secret_scan_clean": true,
+  "weights_loaded_from_release": true
+}

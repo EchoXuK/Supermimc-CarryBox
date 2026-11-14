@@ -1,7 +1,0 @@
-{
-  "random_frames": 64,
-  "max_absolute_error": 6.68e-06,
-  "tolerance": 0.001,
-  "root_pos_w_tested": true,
-  "discriminator_required_for_inference": false
-}

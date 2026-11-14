@@ -62,6 +62,8 @@ class RunningNorm(nn.Module):
         return torch.sqrt(self.var + self.eps**2)
 
 
+
+
 # bf16 autocast for MLP matmuls only (state integration, FK, rewards stay fp32)
 AMP_DTYPE: torch.dtype | None = None
 
@@ -280,6 +282,7 @@ class Policy(nn.Module):
                  visual_dim: int = 0):  # fmt: skip
         super().__init__()
         self.hist = hist
+        self.act_dim = act_dim
         self.visual_dim = visual_dim
         if visual_dim:
             from .vision import DepthEncoder
@@ -301,6 +304,12 @@ class Policy(nn.Module):
                 visual: torch.Tensor | None = None, depth: torch.Tensor | None = None) -> torch.Tensor:
         """obs_hist: (B, hist, obs_dim) noisy observations, newest last. ``z`` (optional) is
         ``encode(goal)`` computed beforehand."""
+        a = run_mlp(self.dec, self.condition(obs_hist, goal, z, visual, depth))
+        if self.ref_off is not None:
+            a = a + self.reference_action(goal)
+        return a
+
+    def condition(self, obs_hist, goal, z=None, visual=None, depth=None):
         o = self.obs_norm(obs_hist).flatten(-2)
         if z is None:
             z = self.encode(goal)
@@ -311,15 +320,33 @@ class Policy(nn.Module):
             # E is trained only by reconstruction. Predicted z keeps its separate
             # WM dynamics path, while the actor sees it through a stop-gradient.
             parts += (visual.detach(),)
-        a = run_mlp(self.dec, torch.cat(parts, -1))
-        if self.ref_off is not None:
-            q_ref = goal[..., self.ref_off : self.ref_off + a.shape[-1]]
-            a = a + (q_ref - self.ref_q0) / self.ref_alpha
-        return a
+        return torch.cat(parts, -1)
+
+    def reference_action(self, goal):
+        if self.ref_off is None:
+            return goal.new_zeros((*goal.shape[:-1], self.act_dim))
+        q_ref = goal[..., self.ref_off : self.ref_off + self.act_dim]
+        return (q_ref - self.ref_q0) / self.ref_alpha
 
     def encode(self, goal: torch.Tensor) -> torch.Tensor:
         """Motion latent z from the goal features (reference only, independent of the robot state)."""
         return torch.tanh(run_mlp(self.enc, self.goal_norm(goal)))
+
+
+
+
+def make_policy(obs_dim, goal_dim, act_dim, robot, run_args):
+    """Build the ordinary policy shared by training, evaluation and export."""
+    options = policy_kwargs(run_args, robot)
+    widths = lambda key: tuple(int(x) for x in run_args.get(key, "2048,1024,512,256").split(","))
+    return Policy(obs_dim, goal_dim, act_dim, hist=run_args.get("hist", 10),
+                  enc_hidden=widths("enc_hidden"), dec_hidden=widths("dec_hidden"), **options)
+
+
+def initialize_policy(policy, state, source_args):
+    """Load a compatible ordinary policy without architecture conversion."""
+    check_pruned(source_args, nets_only=True)
+    policy.load_state_dict(state)
 
 
 # Switches of the development code that this release does not have, with their "off" value. Run arguments (args.json,
@@ -341,6 +368,9 @@ def check_pruned(a_: dict, nets_only: bool = False, what: str = "this run") -> N
     """Raise if the run arguments ``a_`` use a removed switch. ``nets_only``: only the switches that change the
     networks (enough to rebuild and evaluate a policy / world model); otherwise also every removed training switch
     (for tools that recompute the training objective)."""
+    algorithm = a_.get("algorithm", "bptt")
+    if algorithm != "bptt":
+        raise ValueError(f"{what} uses unsupported algorithm {algorithm!r}; only bptt checkpoints are supported")
     keys = PRUNED_NET if nets_only else PRUNED_OFF
     bad = {k: a_[k] for k in keys if k in a_ and a_[k] != PRUNED_OFF[k] and not (PRUNED_OFF[k] is None and not a_[k])}
     if bad:
@@ -361,21 +391,6 @@ def policy_ref_skip(a_: dict, robot):
     from .motion import GOAL_Q_OFFSET
 
     return (GOAL_Q_OFFSET, robot.default_joint_pos_list(), robot.action_scale_list())
-
-
-def check_checkpoint_config(saved: dict, requested: dict, what: str):
-    """Fail before loading incompatible policy/critic inputs or reward semantics."""
-    fields = [("goal_frames", 10), ("hist", 10), ("imitation_mode", "tracking"), ("pi_ref_skip", False),
-              ("task", "tracking"), ("vision", "none"), ("carry_goal_anchor", "reference")]
-    if what == "--resume" and saved.get("imitation_mode") == "amp":
-        fields += [("horizon", 32), ("amp_reward_weight", 5.), ("amp_disc_lr", 1e-5), ("amp_disc_batch", 256),
-                   ("amp_grad_penalty", 10.), ("amp_foot_slip_weight", .25),
-                   ("carry_action_acc", .1), ("carry_action_acc_arms", 0.), ("carry_approach_progress_weight", 0.)]
-    for key, fallback in fields:
-        old, new = saved.get(key, fallback), requested.get(key, fallback)
-        if old != new:
-            raise ValueError(f"{what}: checkpoint {key}={old!r}, requested {new!r}; "
-                             "use matching arguments or train the new AMP policy from scratch")
 
 
 class Critic(nn.Module):

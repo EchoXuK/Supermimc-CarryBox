@@ -1,0 +1,69 @@
+{
+  "split": "test",
+  "iteration": 25845,
+  "training_hours": 6.000063507528717,
+  "norm_return": 0.8142889738082886,
+  "task_norm_return": 0.8426774144172668,
+  "macro_success_rate": 0.9450496037801107,
+  "success_rate": 0.9433962106704712,
+  "completion_fraction": 0.9781323075294495,
+  "failure_causes": {
+    "robot_height": 0,
+    "robot_tilt": 0,
+    "box_position": 2,
+    "box_drop": 16,
+    "box_below_floor": 0
+  },
+  "per_stage": {
+    "01_approach_lift": {
+      "clips": 17,
+      "norm_return": 0.8149010539054871,
+      "task_norm_return": 0.8518410325050354,
+      "fail_rate": 0.0784313753247261,
+      "success_rate": 0.9215685725212097,
+      "box_drop_count": 4,
+      "completion_fraction": 0.9770349860191345,
+      "mean_object_error_m": 0.018674785271286964
+    },
+    "02_carry_move": {
+      "clips": 54,
+      "norm_return": 0.7843306660652161,
+      "task_norm_return": 0.8147450089454651,
+      "fail_rate": 0.08641976118087769,
+      "success_rate": 0.9135802388191223,
+      "box_drop_count": 12,
+      "completion_fraction": 0.9643042087554932,
+      "mean_object_error_m": 0.08636258542537689
+    },
+    "03_lower_place": {
+      "clips": 35,
+      "norm_return": 0.8602134585380554,
+      "task_norm_return": 0.88132244348526,
+      "fail_rate": 0.0,
+      "success_rate": 1.0,
+      "box_drop_count": 0,
+      "completion_fraction": 1.0,
+      "mean_object_error_m": 0.051985230296850204
+    }
+  },
+  "pooled_gait": {
+    "seconds": 1603.3200000000002,
+    "rollouts": 318,
+    "extra": 1451,
+    "extra_per_minute": 54.29982785719631,
+    "missed_steps": 336,
+    "repeated_same_foot": 98
+  },
+  "release_stability": {
+    "rollouts_reaching_release": 105,
+    "released_steps": 5772,
+    "mean_speed_m_s": 0.008253627456724644,
+    "mean_object_error_m": 0.06292770802974701,
+    "reference_window_coverage": {
+      "complete": 14,
+      "partial": 1,
+      "unknown": 20
+    }
+  },
+  "mean_object_error_m": 0.06415598094463348
+}

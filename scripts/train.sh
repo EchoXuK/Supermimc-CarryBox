@@ -1,8 +1,7 @@
 #!/bin/bash
-# Train with the 45-frame/32-step AMP carry recipe (PRESET[box_carry]).
+# Train with the box-carry recipe (scripts/presets.sh, PRESET[box_carry]).
 # Usage: bash scripts/train.sh <log_dir> [extra train.py flags, e.g. --seed 1]
-# PRESET_NAME=main selects LAFAN1; box_carry_tracking selects the legacy carry recipe.
-# Python: $PYTHON, default .venv/bin/python.
+# PRESET_NAME=main selects the original LAFAN1 recipe. Python: $PYTHON, default .venv/bin/python.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/presets.sh

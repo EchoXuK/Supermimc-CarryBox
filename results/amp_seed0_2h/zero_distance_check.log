@@ -1,6 +1,0 @@
-test_far_approach_progress_is_signed_bounded_and_stops_before_grasp (tools.test_amp.AMPTests.test_far_approach_progress_is_signed_bounded_and_stops_before_grasp) ... ok
-
-----------------------------------------------------------------------
-Ran 1 test in 0.691s
-
-OK

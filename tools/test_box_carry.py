@@ -4,8 +4,9 @@ Run: OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=2 .venv/bin/python tools/test_box_ca
 """
 
 import csv
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
 import sys
 
 import mujoco
@@ -178,23 +179,22 @@ class CarryTests(unittest.TestCase):
 
     def test_joint_projection_updates_reference(self):
         path = DEFAULT_MOTIONS / "01_approach_lift/train/carry_box_20-20-20_282_5810480_000_01_000.npz"
-        from blinkmimic.box_carry import load_npz
-
-        p, quat, q, fps = load_npz(path, self.robot.joint_names)
-        q = q.copy()
-        frame = min(105, len(q) - 2)
-        # The cleaned clip no longer contains the original out-of-limit init pose.
-        # Keep one joint outside its limit throughout the clip so the fixture
-        # has no single-frame impulse at floating-point resampling boundaries.
-        # Projection, velocities, goals and FK remain covered using memory only.
-        q[:, 0] = float(self.kin.q_hi[0]) + .3
-        with patch("blinkmimic.box_carry.load_npz", return_value=(p, quat, q, fps)):
-            m = CarryMotionLib.from_file(path, self.robot, self.kin, "cpu")
-        raw = torch.from_numpy(q)
+        m = CarryMotionLib.from_file(path, self.robot, self.kin, "cpu")
+        # The cleaned data removed the old out-of-limit prefix. Inject a known
+        # violation into a private fixture instead of depending on that prefix.
+        order = [NPZ_JOINT_NAMES.index(n) for n in self.robot.joint_names]
+        with np.load(path) as x:
+            payload = {k: x[k].copy() for k in x.files}
+        payload["joint_pos"][10, order[0]] = float(self.kin.q_hi[0]) + .3
+        with TemporaryDirectory() as directory:
+            np.savez(Path(directory) / "projection.npz", **payload)
+            m = CarryMotionLib(Path(directory), [dict(m.rows[0], clip_npz="projection.npz")],
+                               self.kin, "cpu", self.robot.joint_names)
+        raw = torch.from_numpy(payload["joint_pos"][:, order])
         expected = raw.clamp(self.kin.q_lo, self.kin.q_hi)
         self.assertGreater((raw - expected).abs().max().item(), .2)
         torch.testing.assert_close(m.q, expected, atol=2e-6, rtol=2e-5)
-        f = torch.tensor([frame])
+        f = torch.tensor([min(105, m.num_frames - 1)])
         from blinkmimic.motion import GOAL_Q_OFFSET, _gradient
         torch.testing.assert_close(m.goal(f - 1, 1)[:, GOAL_Q_OFFSET:GOAL_Q_OFFSET + 29], expected[f], atol=2e-6, rtol=2e-5)
         torch.testing.assert_close(m.qd, _gradient(expected, .02), atol=1e-4, rtol=2e-5)

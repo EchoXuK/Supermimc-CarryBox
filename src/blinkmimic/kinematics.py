@@ -20,6 +20,7 @@ class Kinematics:
         m = mujoco.MjModel.from_xml_path(robot.mjcf_path)
         self.device = device
         tracked = robot.tracked_bodies
+        self.joint_names = robot.joint_names
         jname_to_idx = {n: i for i, n in enumerate(robot.joint_names)}
         # moving bodies in tree order (mujoco orders parents before children)
         bodies, parent, joint_idx, axes, offs_p, offs_R = [], [], [], [], [], []
@@ -58,6 +59,39 @@ class Kinematics:
                 lo[jname_to_idx[n]], hi[jname_to_idx[n]] = m.jnt_range[j]
         self.q_lo = torch.tensor(lo, dtype=torch.float32, device=device)
         self.q_hi = torch.tensor(hi, dtype=torch.float32, device=device)
+        # G1's four spherical sole pads, in heel-left/right, toe-left/right order.
+        self.sole_idx, offsets, radii = [], [], []
+        for side in ("left", "right"):
+            name = side + "_ankle_roll_link"
+            if name not in tracked:
+                break
+            bid = m.body(name).id
+            gs = [g for g in range(m.ngeom) if m.geom_bodyid[g] == bid
+                  and (m.geom_contype[g] or m.geom_conaffinity[g])
+                  and m.geom_type[g] == mujoco.mjtGeom.mjGEOM_SPHERE]
+            gs.sort(key=lambda g: (m.geom_pos[g, 0], -m.geom_pos[g, 1]))
+            if len(gs) != 4:
+                break
+            self.sole_idx.append(tracked.index(name))
+            offsets.append(m.geom_pos[gs].copy())
+            radii.append(m.geom_size[gs, 0].copy())
+        self.sole_offsets = torch.tensor(np.array(offsets), dtype=torch.float32, device=device)
+        self.sole_radii = torch.tensor(np.array(radii), dtype=torch.float32, device=device)
+
+    def sole_points(self, bp, bR, bv, bw):
+        """Sphere-bottom positions and centre velocities, shape (..., foot=2, pad=4, xyz).
+
+        The world-down radius offset is constant, so position derivatives equal centre
+        velocities. These geometric probes are shared by rewards and evaluation.
+        """
+        if len(self.sole_idx) != 2:
+            raise ValueError("Reference gait needs four spherical sole pads on each foot")
+        r = mv3(bR[..., self.sole_idx, :, :].unsqueeze(-3), self.sole_offsets)
+        pos = bp[..., self.sole_idx, :].unsqueeze(-2) + r
+        bottom = torch.stack((pos[..., 0], pos[..., 1], pos[..., 2] - self.sole_radii), -1)
+        vel = bv[..., self.sole_idx, :].unsqueeze(-2) + torch.cross(
+            bw[..., self.sole_idx, :].unsqueeze(-2).expand_as(r), r, dim=-1)
+        return bottom, vel
 
     def forward(self, p, R, v, w, q, qd, all_bodies: bool = False):
         """Tracked-body world positions, rotations, linear (link-origin) and angular velocities.

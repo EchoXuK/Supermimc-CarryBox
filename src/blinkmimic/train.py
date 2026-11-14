@@ -14,9 +14,10 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--carry_gait_profile", choices=["legacy", "reference_phase", "reference_phase_v2", "reference_phase_v3"], default="legacy")
+parser.add_argument("--carry_gait_scale", type=float, default=1.)
+parser.add_argument("--carry_reward_profile", choices=["legacy", "grasp_place", "grasp_place_reach"], default="legacy")
 parser.add_argument("--task", choices=["box_carry", "tracking"], default="box_carry")
-parser.add_argument("--imitation_mode", choices=["tracking", "amp"], default=None,
-                    help="default amp for box_carry, tracking for the original tracking task")
 parser.add_argument("--split", choices=["train", "val", "test"], default="train")
 parser.add_argument("--stages", type=str, default=None, help="comma-separated stage names; default all three")
 parser.add_argument("--max_clips", type=int, default=None, help="limit clips for a smoke run, interleaved across stages")
@@ -33,7 +34,22 @@ parser.add_argument("--iterations", type=int, default=320_000)
 parser.add_argument("--buffer_steps", type=int, default=1000)
 parser.add_argument("--utd", type=float, default=0.4, help="updates per vectorized simulator step")
 parser.add_argument("--horizon", type=int, default=32)
-parser.add_argument("--goal_frames", type=int, default=None, help="continuous future frames: box_carry 45 (0.9 s), tracking 10")
+parser.add_argument("--min_imagination_steps", type=int, default=None,
+                    help="box_carry: minimum remaining reference transitions at actor starts; default --horizon")
+parser.add_argument("--goal_frames", type=int, default=10)
+parser.add_argument("--goal_frame_offsets", type=str, default=None,
+                    help="comma-separated reference offsets at 50 Hz; default 1..goal_frames; first must be 1")
+parser.add_argument("--wm_update_interval", type=int, default=0,
+                    help="one WM minibatch per this many real transitions; 0 preserves --wm_batches")
+parser.add_argument("--policy_warmup_steps", type=int, default=None,
+                    help="real transitions before actor updates; overrides --wm_only_iters")
+parser.add_argument("--min_reset_steps", type=int, default=1,
+                    help="minimum remaining reference transitions at sampled training resets; 1 preserves legacy sampling")
+parser.add_argument("--probe_minutes", type=float, default=0., help="isolated 30-clip validation interval")
+parser.add_argument("--probe_initial", action="store_true", help="also evaluate the random policy before collection")
+parser.add_argument("--constant_lr", action="store_true")
+parser.add_argument("--real_contact_reward", action="store_true", help="use the configured foot bonus in real BPTT collection too")
+parser.add_argument("--dataset_fingerprint", type=str, default=None)
 parser.add_argument("--hist", type=int, default=10)
 parser.add_argument("--wm_window", type=int, default=8)
 parser.add_argument("--wm_batches", type=int, default=10)
@@ -67,21 +83,6 @@ parser.add_argument("--carry_residual_rate", type=float, default=0., help="carry
 parser.add_argument("--carry_joint_vel", type=float, default=0., help="carry: weight of mean squared joint-velocity error to reference")
 parser.add_argument("--carry_residual_acc", type=float, default=0., help="carry: weight of reference-relative action second differences")
 parser.add_argument("--carry_residual_acc_arms", type=float, default=1., help="carry: arm multiplier for residual acceleration; 0 preserves grasp corrections")
-parser.add_argument("--carry_action_acc", type=float, default=None, help="physical action second differences: AMP default 0.1")
-parser.add_argument("--carry_action_acc_arms", type=float, default=0., help="arm multiplier for action acceleration")
-parser.add_argument("--amp_reward_weight", type=float, default=5.)
-parser.add_argument("--amp_disc_lr", type=float, default=1e-5)
-parser.add_argument("--amp_disc_batch", type=int, default=256)
-parser.add_argument("--amp_grad_penalty", type=float, default=10.)
-parser.add_argument("--amp_foot_slip_weight", type=float, default=.25)
-parser.add_argument("--carry_palm_far_weight", type=float, default=None, help="approach palm mixture: AMP default .25; old checkpoints default 0")
-parser.add_argument("--carry_palm_far_std", type=float, default=.5, help="far approach palm distance scale, metres")
-parser.add_argument("--carry_palm_far_kernel", choices=["gaussian", "inverse_quadratic"], default=None,
-                    help="bounded approach shaping with metre-scale gradients; old checkpoints use gaussian")
-parser.add_argument("--carry_goal_anchor", choices=["reference", "robot"], default=None,
-                    help="future target position origin: live robot for new AMP runs, reference for legacy models")
-parser.add_argument("--carry_approach_progress_weight", type=float, default=None,
-                    help="bounded far-approach closing-speed reward; AMP default 1, legacy checkpoints 0")
 # ---- method changes of this release (defaults = SuperMimic baseline; scripts/train.sh sets the released recipe) ----
 parser.add_argument("--wm_structured", action="store_true",
                     help="semi-implicit world model: velocity increments + position corrections on top of the trapezoidal drift")
@@ -93,7 +94,7 @@ parser.add_argument("--pi_opt", type=str, default="adam", choices=["adam", "muon
 parser.add_argument("--wm_opt", type=str, default="adam", choices=["adam", "muon"],
                     help="world-model optimizer: adam, or muon = Muon on the hidden weight matrices of the world-model MLP (same "
                          "scheme as --pi_opt muon), Adam elsewhere")
-parser.add_argument("--wm_only_iters", type=int, default=None, help="WM (and AMP discriminator) warm-up: carry 200, tracking 500")
+parser.add_argument("--wm_only_iters", type=int, default=500, help="world-model-only iterations at the start")
 parser.add_argument("--bin_fix", action="store_true",
                     help="correct per-bin reset statistics when several episodes of one step share a bin (env.py _bin_ema)")
 parser.add_argument("--pi_lr_mult", type=float, default=1.0,
@@ -154,7 +155,6 @@ parser.add_argument("--cuda_graph", action="store_true",
 parser.add_argument("--lr_decay_iters", type=int, default=250_000)
 parser.add_argument("--ckpt_every", type=int, default=2000)
 parser.add_argument("--ckpt_light", action="store_true", help="periodic checkpoints hold only the deployed policy (what the evaluators read), are written by a background thread, and last.pt is written only at the end (checkpoint I/O off the training clock)")
-parser.add_argument("--ckpt_initial", action="store_true", help="save the normalized initial policy after collection warmup for a learning baseline")
 parser.add_argument("--ckpt_minutes", type=float, default=3.0, help="also checkpoint every n minutes of training wall-clock")
 parser.add_argument("--max_hours", type=float, default=None, help="stop after this much training wall-clock")
 parser.add_argument("--log_every", type=int, default=50)
@@ -166,32 +166,15 @@ parser.add_argument("--init_from", type=str, default=None,
                     help="initialize networks from a full checkpoint, with fresh optimizers, iteration and wall clock")
 parser.add_argument("--amp", type=str, default="bf16", choices=["none", "bf16"], help="autocast dtype for MLP matmuls")
 args = parser.parse_args()
-args.imitation_mode = args.imitation_mode or ("amp" if args.task == "box_carry" else "tracking")
-args.goal_frames = args.goal_frames if args.goal_frames is not None else (45 if args.task == "box_carry" else 10)
-args.wm_only_iters = args.wm_only_iters if args.wm_only_iters is not None else (200 if args.task == "box_carry" else 500)
-args.carry_action_acc = args.carry_action_acc if args.carry_action_acc is not None else (.1 if args.imitation_mode == "amp" else 0.)
-args.carry_palm_far_weight = args.carry_palm_far_weight if args.carry_palm_far_weight is not None else (.25 if args.imitation_mode == "amp" else 0.)
-args.carry_palm_far_kernel = args.carry_palm_far_kernel or ("inverse_quadratic" if args.imitation_mode == "amp" else "gaussian")
-args.carry_goal_anchor = args.carry_goal_anchor or ("robot" if args.imitation_mode == "amp" else "reference")
-args.carry_approach_progress_weight = args.carry_approach_progress_weight if args.carry_approach_progress_weight is not None else (1. if args.imitation_mode == "amp" else 0.)
-AMP_PRIOR = args.imitation_mode == "amp"
-if AMP_PRIOR and args.task != "box_carry":
-    parser.error("AMP motion priors currently require --task box_carry")
-if AMP_PRIOR and args.split != "train":
-    parser.error("AMP training/expert data require --split train; use evaluate for val/test")
-if AMP_PRIOR and (args.pi_ref_skip or args.carry_residual_rate or args.carry_residual_acc or args.carry_joint_vel):
-    parser.error("AMP requires no --pi_ref_skip or reference-relative smoothing/joint-velocity rewards; use --carry_action_acc")
-if AMP_PRIOR and args.contact_reward:
-    parser.error("AMP uses --amp_foot_slip_weight instead of reference --contact_reward")
-if args.goal_frames < 1 or args.horizon < 1:
-    parser.error("goal_frames and horizon must be positive")
-if args.amp_disc_batch < 1 or not math.isfinite(args.amp_disc_lr) or args.amp_disc_lr <= 0:
-    parser.error("AMP discriminator needs a positive batch and learning rate")
-if not math.isfinite(args.amp_grad_penalty) or args.amp_grad_penalty < 0:
-    parser.error("amp_grad_penalty must be finite and nonnegative")
+if args.task != "box_carry" and args.carry_reward_profile != "legacy":
+    parser.error("carry reward profiles require --task box_carry")
+if args.task != "box_carry" and args.carry_gait_profile != "legacy":
+    parser.error("carry gait profiles require --task box_carry")
+if not math.isfinite(args.carry_gait_scale) or args.carry_gait_scale < 0:
+    parser.error("carry_gait_scale must be finite and nonnegative")
 if args.resume and args.init_from:
     parser.error("choose --resume or --init_from")
-if args.task != "box_carry" and (args.carry_residual_rate or args.carry_joint_vel or args.carry_residual_acc or args.carry_action_acc):
+if args.task != "box_carry" and (args.carry_residual_rate or args.carry_joint_vel or args.carry_residual_acc):
     parser.error("carry smoothing rewards require --task box_carry")
 args.vision = args.vision or ("latent" if args.task == "box_carry" else "none")
 if args.vision == "latent" and args.latent_recon_weight <= 0:
@@ -211,9 +194,11 @@ from blinkmimic.env import PHYSICS_DT, TrackingSim, make_sim
 from blinkmimic.kinematics import Kinematics
 from blinkmimic.mdp import MDP, inv_dim, unflatten_state
 from blinkmimic.motion import CONTROL_DT, MotionLib
+from blinkmimic.motion import goal_frame_offsets
+from blinkmimic.training_control import TransitionBudget, ValidationProbe, TrainingHeartbeat, ParameterUpdates, world_model_probe, training_summaries
 import blinkmimic.networks as networks
 import blinkmimic.rotations as rotations
-from blinkmimic.networks import Critic, Policy, WorldModel, check_pruned, policy_kwargs, check_checkpoint_config
+from blinkmimic.networks import Critic, WorldModel, check_pruned, initialize_policy, make_policy
 from blinkmimic.mirror import Mirror
 from blinkmimic.objective import actor_objective
 from blinkmimic.mdp import flatten_state
@@ -221,22 +206,24 @@ from blinkmimic.robot import get_robot
 from blinkmimic.sensing import ObsPipeline
 from blinkmimic.box_carry import SCENE_DIM, build_task, robot_spec
 from blinkmimic.vision import LatentDecoder, latent_prediction_loss, reconstruction_indices
-from blinkmimic.amp import MotionPrior, DiscriminatorUpdates
-
-initial_checkpoint = None
-if args.resume or args.init_from:
-    initial_checkpoint = torch.load(args.resume or args.init_from, map_location="cpu", weights_only=False)
-    check_checkpoint_config(initial_checkpoint["args"], vars(args), what="--resume" if args.resume else "--init_from")
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(args.seed)
+goal_frame_offsets(vars(args))
+if args.wm_update_interval < 0 or (args.policy_warmup_steps is not None and args.policy_warmup_steps < 0):
+    parser.error("training step budgets must be nonnegative")
+if args.min_reset_steps < 1:
+    parser.error("min_reset_steps must be positive")
+if args.horizon < 1:
+    parser.error("horizon must be positive")
+if args.min_imagination_steps is not None and (args.task != "box_carry" or
+        not 1 <= args.min_imagination_steps <= args.horizon or args.cuda_graph):
+    parser.error("min_imagination_steps requires box_carry, 1..horizon, and no CUDA graph")
+if args.probe_minutes < 0 or ((args.probe_minutes or args.probe_initial) and args.task != "box_carry"):
+    parser.error("validation probes need box_carry and a nonnegative interval")
 networks.AMP_DTYPE = torch.bfloat16 if args.amp == "bf16" else None
 dev = "cuda:0"
-os.makedirs(args.log_dir, exist_ok=True)
-json.dump({"pid": os.getpid()}, open(os.path.join(args.log_dir, "train_pid.json"), "w"))
-json.dump(vars(args), open(os.path.join(args.log_dir, "args.json"), "w"), indent=2)
-
 robot = get_robot(args.robot)
 if args.task == "box_carry":
     robot = robot_spec(robot)
@@ -249,14 +236,14 @@ layout = XiLayout(robot, dev)
 normalize_xi = layout.normalize
 motion, mdp = build_task(args.task, robot, args.motion_dir, kin, dev, layout.dim, args.split,
                          args.stages.split(",") if args.stages else None, args.max_clips, reward_options=vars(args))
-MAX_REWARD = mdp.max_step_reward
-if not bool((motion.clip_len > args.horizon).any()):
-    raise ValueError("No reference clip is longer than --horizon")
+REAL_CONTACT = args.contact_reward if args.real_contact_reward else 0.
+MAX_REWARD = mdp.max_step_reward + (2 * REAL_CONTACT * CONTROL_DT if args.carry_gait_profile == "legacy" else 0.)
+MIN_IMAGINATION = args.min_imagination_steps or args.horizon
+if not bool((motion.clip_len > MIN_IMAGINATION).any()):
+    raise ValueError("No reference clip supplies the minimum imagination transitions")
 print(f"task={args.task} vision={args.vision} split={args.split}: {len(motion.names)} clips, {motion.num_frames} frames", flush=True)
 if OBJECT:
     print(f"joint-limit projection: {motion.projected_joint_frames} frames, max correction {motion.max_joint_correction:.4f} rad", flush=True)
-print(f"imitation={args.imitation_mode} reference={args.goal_frames} frames/{args.goal_frames * CONTROL_DT:.2f}s "
-      f"BPTT={args.horizon} steps/{args.horizon * CONTROL_DT:.2f}s", flush=True)
 pipe = ObsPipeline(robot, mdp, layout, dev, PHYSICS_DT)
 K, Hh, HZ = args.goal_frames, args.hist, args.horizon
 GOAL_DIM = motion.goal_dim(K)
@@ -269,8 +256,7 @@ rotations.ELEMENTWISE = args.fused_rot
 wm = WorldModel(J, layout.dim, use_prev_action=robot.has_action_delay, hidden=widths(args.wm_hidden),
                 structured=args.wm_structured, dt=CONTROL_DT, object_state=OBJECT,
                 z_dim=args.visual_dim if VISION else 0, scene_dim=SCENE_DIM if OBJECT else 0).to(dev)  # fmt: skip
-pi = Policy(mdp.obs_dim, GOAL_DIM, J, hist=Hh, enc_hidden=widths(args.enc_hidden), dec_hidden=widths(args.dec_hidden),
-            **policy_kwargs(vars(args), robot)).to(dev)
+pi = make_policy(mdp.obs_dim, GOAL_DIM, J, robot, vars(args)).to(dev)
 critic = Critic(CRITIC_IN).to(dev)
 latent_dec = LatentDecoder(args.visual_dim).to(dev) if VISION else None
 wm_modules = nn.ModuleList([wm, pi.depth_enc, latent_dec]) if VISION else wm
@@ -278,18 +264,19 @@ actor_params = [p for n, p in pi.named_parameters() if not n.startswith("depth_e
 actor_modules = nn.ModuleList([pi.enc, pi.dec])
 VISION_STATS = torch.zeros(2, device=dev)
 HEALTH_STATS = torch.zeros(2, device=dev)
-motion_prior = MotionPrior(kin).to(dev) if AMP_PRIOR else None
-disc_updates = DiscriminatorUpdates(motion_prior, motion, args.amp_disc_lr, args.amp_disc_batch,
-                                    args.amp_grad_penalty) if AMP_PRIOR else None
-if AMP_PRIOR:
-    mdp.motion_prior = motion_prior
-AMP_LOG_KEYS = ("disc_loss", "grad_penalty", "policy_score", "expert_score", "disc_gradnorm")
-amp_stats = []
 PROFILE_TERMS = ("object_pos", "object_ori", "hand_error", "track", "object_track", "hand_contact", "release_stability",
                  "task_reward", "residual_rate", "joint_vel_error", "residual_acc", "smooth_penalty")
-if AMP_PRIOR:
-    PROFILE_TERMS += ("amp_reward", "amp_score", "carry_task_reward", "train_carry_task_reward", "palms_long_range_reward", "approach_progress_reward",
-                      "control_penalty", "action_acc", "foot_slip", "release_recovery")
+if args.task == "box_carry":
+    PROFILE_TERMS += ("body_pos_reward", "body_ori_reward", "body_linvel_reward", "body_angvel_reward",
+                      "root_pos_reward", "root_ori_reward", "action_rate_reward", "joint_limit_reward",
+                      "foot_contact_reward", "hand_track_reward", "grasp_reward", "release_reward",
+                      "gait_contact_penalty", "gait_motion_penalty", "gait_velocity_penalty", "gait_penalty",
+                      "action_saturation_fraction")
+if args.carry_reward_profile != "legacy":
+    PROFILE_TERMS += ("grasp_penalty", "drop_penalty", "place_penalty")
+if args.carry_reward_profile == "grasp_place_reach":
+    PROFILE_TERMS += ("reach_root_penalty", "reach_hand_penalty", "reach_penalty")
+PROFILE_COLUMNS = PROFILE_TERMS + tuple(k + "_env_std" for k in PROFILE_TERMS)
 profile_terms, profile_times = [], []
 GRAPH = args.cuda_graph
 if GRAPH:
@@ -333,40 +320,50 @@ def load_opt_states(ck: dict):
 INIT_BINS = None  # --resume: reset-sampler statistics, copied into the simulator once it exists
 RESUME_CTRL = None  # --resume: the control state of last.pt, applied once the objects exist
 if args.init_from:
-    ck = initial_checkpoint
+    ck = torch.load(args.init_from, map_location=dev, weights_only=False)
     check_pruned(ck.get("args", {}), what=args.init_from)
     for key in ("task", "vision"):
         if ck["args"].get(key, {"task": "tracking", "vision": "none"}[key]) != getattr(args, key):
             raise ValueError(f"--init_from requires the checkpoint's {key}")
     wm.load_state_dict(ck["wm"])
-    pi.load_state_dict(ck["pi"])
+    initialize_policy(pi, ck["pi"], ck["args"])
     critic.load_state_dict(ck["critic"])
     if VISION:
         latent_dec.load_state_dict(ck["latent_dec"])
-    if AMP_PRIOR:
-        motion_prior.load_checkpoint(ck["motion_prior"])
     if pi_avg is not None:
-        pi_avg.module.load_state_dict(ck["pi"])
+        pi_avg.module.load_state_dict(pi.state_dict())
         pi_avg.n_averaged.fill_(1)
     print(f"initialized networks from {args.init_from} at iteration {ck['iteration']}; fresh optimizers and 0-hour clock", flush=True)
     del ck
 if args.resume:
     # needs the full training state: last.pt. "pi" is the Polyak average with --pi_ema (what evaluation uses), so the
     # live policy comes from "pi_live" and the average from "pi_avg"
-    ck = initial_checkpoint
-    assert "opt_pi" in ck, f"--resume {args.resume}: no optimizer state (use last.pt)"
+    ck = torch.load(args.resume, map_location=dev, weights_only=False)
     check_pruned(ck.get("args", {}), what=args.resume)
+    assert "opt_pi" in ck, f"--resume {args.resume}: no optimizer state (use last.pt)"
     for key in ("task", "vision", "split", "stages", "max_clips"):
         expected = {"task": "tracking", "vision": "none", "split": "train"}.get(key)
         if ck["args"].get(key, expected) != getattr(args, key):
             raise ValueError(f"--resume requires the checkpoint's {key}={ck['args'].get(key, expected)!r}")
+    for key, default in (("carry_reward_profile", "legacy"),
+                         ("carry_gait_profile", "legacy"), ("carry_gait_scale", 1.)):
+        if ck["args"].get(key, default) != getattr(args, key):
+            raise ValueError(f"--resume requires the checkpoint's {key}; use --init_from for a new experiment")
+    if goal_frame_offsets(ck["args"]) != goal_frame_offsets(vars(args)):
+        raise ValueError("--resume requires the checkpoint's goal_frame_offsets")
+    for key, default in (("horizon", 32), ("min_imagination_steps", None),
+                         ("wm_update_interval", 0), ("policy_warmup_steps", None), ("min_reset_steps", 1),
+                         ("constant_lr", False), ("real_contact_reward", False), ("dataset_fingerprint", None)):
+        if ck["args"].get(key, default) != getattr(args, key):
+            raise ValueError(f"--resume requires the checkpoint's {key}")
+    for key, default in (("carry_residual_rate", 0.), ("carry_joint_vel", 0.), ("carry_residual_acc", 0.),
+                         ("carry_residual_acc_arms", 1.), ("contact_reward", 0.), ("gamma", .99), ("lam", .95)):
+        if ck["args"].get(key, default) != getattr(args, key):
+            raise ValueError(f"--resume requires the checkpoint's {key}; use --init_from to change the objective")
     wm.load_state_dict(ck["wm"]), pi.load_state_dict(ck.get("pi_live", ck["pi"])), critic.load_state_dict(ck["critic"])
     if VISION:
         latent_dec.load_state_dict(ck["latent_dec"])
     load_opt_states(ck)
-    if AMP_PRIOR:
-        motion_prior.load_checkpoint(ck["motion_prior"])
-        disc_updates.load_checkpoint(ck)
     start_it, wall_offset, sim_steps = ck["iteration"], ck["wall_time"], ck["sim_steps"]
     if pi_avg is not None:
         if ck.get("pi_avg") is not None:
@@ -382,7 +379,14 @@ if args.resume:
         print(f"--resume: no control state in {args.resume}; LR trigger, probe failures and reset statistics restart", flush=True)
     # a warm restart either way: the replay buffer, simulator state and random streams are not saved
     del ck
-initial_checkpoint = None
+
+
+# Publish run metadata only after checkpoint validation and all state loads succeed.
+os.makedirs(args.log_dir, exist_ok=True)
+with open(os.path.join(args.log_dir, "train_pid.json"), "w") as stream:
+    json.dump({"pid": os.getpid()}, stream)
+with open(os.path.join(args.log_dir, "args.json"), "w") as stream:
+    json.dump(vars(args), stream, indent=2)
 
 
 # per-component floors on the error normalization (pos, rot, lin vel, ang vel, q, qd increments)
@@ -420,50 +424,58 @@ def _wm_err(S_hat, s1, mask):
 
 
 def _imag_step(S, o_hist, a_prev, f, xi, xi_n, g):
-    a = pi(o_hist, g)
+    a = (pi(o_hist, g)).clamp(-20., 20.)
     S1 = wm.step(S, a, a_prev, xi_n)
     f1 = f + 1
     o1 = mdp.add_noise(mdp.obs(S1, a, xi, f1))
     o_hist = torch.cat((o_hist[:, 1:], o1.unsqueeze(1)), 1)
-    return S1, a, o_hist, f1, mdp.goal(S1, f1, K)
+    return S1, a, o_hist, f1, motion.goal(f1, K)
 
 
 def _imag_step_visual(S, o_hist, a_prev, f, xi, xi_n, g, z, scene):
-    a = pi(o_hist, g, visual=z)
+    a = (pi(o_hist, g, visual=z)).clamp(-20., 20.)
     S1, _, z1 = wm.step_z(S, a, a_prev, xi_n, z, scene)
+    alive = f < motion.clip_end[motion.clip_id[f]]
+    S1 = tuple(torch.where(alive.reshape((-1,) + (1,) * (x.ndim - 1)), y, x) for x, y in zip(S, S1))
+    a = torch.where(alive[:, None], a, a_prev)
+    z1 = torch.where(alive[:, None], z1, z)
     # Clamp tails for short clips and starts close to the end; all heads stay within the same clip.
     f1 = torch.minimum(f + 1, motion.clip_end[motion.clip_id[f]])
     o1 = mdp.add_noise(mdp.obs(S1, a, xi, f1))
-    o_hist = torch.cat((o_hist[:, 1:], o1.unsqueeze(1)), 1)
-    return S1, a, o_hist, f1, mdp.goal(S1, f1, K), z1
+    o_hist = torch.where(alive[:, None, None], torch.cat((o_hist[:, 1:], o1.unsqueeze(1)), 1), o_hist)
+    return S1, a, o_hist, f1, motion.goal(f1, K), z1
 
 
 def _imag_step_object(S, o_hist, a_prev, f, xi, xi_n, g, scene):
-    a = pi(o_hist, g)
+    a = (pi(o_hist, g)).clamp(-20., 20.)
     S1, _, _ = wm.step_z(S, a, a_prev, xi_n, scene=scene)
+    alive = f < motion.clip_end[motion.clip_id[f]]
+    S1 = tuple(torch.where(alive.reshape((-1,) + (1,) * (x.ndim - 1)), y, x) for x, y in zip(S, S1))
+    a = torch.where(alive[:, None], a, a_prev)
     f1 = torch.minimum(f + 1, motion.clip_end[motion.clip_id[f]])
     o1 = mdp.add_noise(mdp.obs(S1, a, xi, f1))
-    return S1, a, torch.cat((o_hist[:, 1:], o1.unsqueeze(1)), 1), f1, mdp.goal(S1, f1, K)
+    history = torch.where(alive[:, None, None], torch.cat((o_hist[:, 1:], o1.unsqueeze(1)), 1), o_hist)
+    return S1, a, history, f1, motion.goal(f1, K)
 
 
 def _imag_step_sensed(S, o_hist, a_prev, f, xi, xi_n, g, st):
     """Imagination step with the robot's stateful signal chain (filters, delay) at the control rate."""
-    a = pi(o_hist, g)
+    a = (pi(o_hist, g)).clamp(-20., 20.)
     S1 = wm.step(S, a, a_prev, xi_n)
     f1 = f + 1
     gyro, accel = pipe.imu_from_states(S, S1, CONTROL_DT) if robot.sensing.imu is not None else (None, None)
     st = pipe.filter_update(st, S1[5], gyro, accel, xi, CONTROL_DT, noise=True, ctrl_rate=True)
     o1, st = pipe.observe(st, pipe.raw_obs(st, S1, a, xi, f1), noise=True, delay=True)
     o_hist = torch.cat((o_hist[:, 1:], o1.unsqueeze(1)), 1)
-    return S1, a, o_hist, f1, mdp.goal(S1, f1, K), st
+    return S1, a, o_hist, f1, motion.goal(f1, K), st
 
 
-def _reward_term(S, f, a, a_prev, ep_step, a_prev2, acc_valid, previous_state=None):
+def _reward_term(S, f, a, a_prev, ep_step, a_prev2, acc_valid):
     d = mdp.soft_termination(S, f)
     if OBJECT or VISION:
         d = torch.where(f >= motion.clip_end[motion.clip_id[f]], torch.ones_like(d), d)
     reward_options = {"smooth_valid": ep_step > 0, "a_prev2": a_prev2,
-                      "smooth_acc_valid": acc_valid, "previous_state": previous_state} if OBJECT else {}
+                      "smooth_acc_valid": acc_valid} if OBJECT else {}
     return mdp.reward(S, f, a, a_prev, w_contact=args.contact_reward, **reward_options), d
 
 
@@ -477,8 +489,13 @@ def _gae_targets(V, rews, dones):
     return torch.stack(targets[::-1])
 
 
-def _critic_loss(X, Y):
-    return ((critic(X) - Y) ** 2).mean()
+def _critic_loss(X, Y, valid=None):
+    error = critic(X) - Y
+    if valid is None:
+        return error.square().mean()
+    # Keep minibatch shapes fixed for torch.compile while excluding terminal
+    # duplicates from both the loss and its gradient.
+    return torch.where(valid, error, 0.).square().sum() / valid.sum().clamp(min=1)
 
 
 def _wm_norm_data(S0, S1, a, a_prev, xi, scene=None):
@@ -493,7 +510,8 @@ compile_fn = (lambda fn: fn) if args.no_compile else torch.compile
 # The carry FK plus the smoothing reductions exceed Triton's fusion limit on this GPU.
 # Bound fusion only for reward heads; keep the WM/actor compilation unchanged.
 reward_compile = (partial(torch.compile, options={"max_fusion_size": 8})
-                  if OBJECT and (args.carry_residual_rate or args.carry_joint_vel or args.carry_residual_acc or AMP_PRIOR)
+                  if OBJECT and (args.carry_residual_rate or args.carry_joint_vel or args.carry_residual_acc
+                                 or args.carry_reward_profile != "legacy")
                   and not args.no_compile else compile_fn)
 wm_rollout = compile_fn(_wm_rollout)
 wm_err = compile_fn(_wm_err)
@@ -509,6 +527,8 @@ critic_loss_c = compile_fn(_critic_loss)
 
 
 def lr_at(it: int) -> float:
+    if args.constant_lr:
+        return args.lr
     if it >= args.lr_decay_iters:
         return args.lr * 0.03
     return args.lr * (0.03 + 0.97 * 0.5 * (1 + math.cos(math.pi * it / args.lr_decay_iters)))
@@ -572,21 +592,19 @@ def wm_update():
 
 
 def sample_valid_starts(B: int):
-    if AMP_PRIOR:
-        return buffer.sample_horizon_starts(B, Hh, motion, HZ, weights=AMP_START_WEIGHTS)
     if args.no_sync:
-        # fixed-size selection without reading the valid count on the host: stable-sort the valid
-        # candidates first (only starts within H frames of a clip end are invalid, < 1%)
+        # Prefer full-length starts without a host count. If there are too few,
+        # carry imagination clamps to this clip and ends its objective at the tail.
         s, h = buffer.sample_starts(2 * B, Hh)
         f = s["f"]
-        ok = f + HZ <= motion.clip_end[motion.clip_id[f]]
+        ok = f + MIN_IMAGINATION <= motion.clip_end[motion.clip_id[f]]
         idx = torch.sort((~ok).to(torch.uint8), stable=True).indices[:B]
         return {k: v[idx] for k, v in s.items()}, {k: v[idx] for k, v in h.items()}
     starts, hists, n = [], [], 0
     while n < B:
         s, h = buffer.sample_starts(2 * B, Hh)
         f = s["f"]
-        ok = f + HZ <= motion.clip_end[motion.clip_id[f]]
+        ok = f + MIN_IMAGINATION <= motion.clip_end[motion.clip_id[f]]
         idx = ok.nonzero(as_tuple=False).squeeze(-1)[: B - n]
         starts.append({k: v[idx] for k, v in s.items()}), hists.append({k: v[idx] for k, v in h.items()})
         n += len(idx)
@@ -636,8 +654,9 @@ class Graphed:
         return tuple(x.clone() for x in self.out)
 
 
-def policy_update():
-    s, h = sample_valid_starts(args.pi_batch)
+def imagine_actor(critic_data=True, diagnostics=False):
+    B = min(16, args.pi_batch) if diagnostics else args.pi_batch
+    s, h = sample_valid_starts(B)
     S = unflatten_state(s["s"])
     xi, f, a_prev = s["xi"], s["f"], s["a_prev"]
     a_prev2 = s["a_prev2"]
@@ -654,8 +673,7 @@ def policy_update():
         o_hist = mdp.add_noise(o_hist)
     set_requires_grad(wm_modules, False)
     set_requires_grad(critic, False)
-    B = args.pi_batch
-    g0 = mdp.goal(S, f, K)
+    g0 = motion.goal(f, K)
     g = g0
     S0 = S
     Ss, As, Aps, Ap2s, Fs, Gs = [], [], [], [], [], []
@@ -664,9 +682,11 @@ def policy_update():
         Ap2s.append(a_prev2)
         a_prev2 = a_prev
         if VISION:
-            S, a_prev, o_hist, f, g, z = imag_step_visual(S, o_hist, a_prev, f, xi, xi_n, g, z, s.get("scene"))
+            step = _imag_step_visual if diagnostics else imag_step_visual
+            S, a_prev, o_hist, f, g, z = step(S, o_hist, a_prev, f, xi, xi_n, g, z, s.get("scene"))
         elif OBJECT:
-            S, a_prev, o_hist, f, g = imag_step_object(S, o_hist, a_prev, f, xi, xi_n, g, s["scene"])
+            step = _imag_step_object if diagnostics else imag_step_object
+            S, a_prev, o_hist, f, g = step(S, o_hist, a_prev, f, xi, xi_n, g, s["scene"])
         elif pipe.stateful:
             S, a_prev, o_hist, f, g, st = imag_step_sensed(S, o_hist, a_prev, f, xi, xi_n, g, st)
         else:
@@ -674,22 +694,91 @@ def policy_update():
         Ss.append(S), As.append(a_prev), Fs.append(f), Gs.append(g)
     flat = lambda xs: torch.stack(xs).flatten(0, 1)  # noqa: E731  (H*B, ...)
     S_all = tuple(flat([St[i] for St in Ss]) for i in range(len(S)))
-    S_previous = tuple(torch.stack([S0[i]] + [St[i] for St in Ss[:-1]]).flatten(0, 1)
-                       for i in range(len(S))) if AMP_PRIOR else None
     f_all = flat(Fs)
     episode_steps = (s["ep_step"].unsqueeze(0) + torch.arange(HZ, device=dev).unsqueeze(1)).flatten()
     history_valid = ((torch.arange(HZ, device=dev).unsqueeze(1) > 0) | s["a_prev2_valid"].unsqueeze(0)).flatten()
-    r, d = reward_term(S_all, f_all, flat(As), flat(Aps), episode_steps,
-                       flat(Ap2s), (episode_steps > 1) & history_valid, S_previous)
+    reward_fn = _reward_term if diagnostics else reward_term
+    r, d = reward_fn(S_all, f_all, flat(As), flat(Aps), episode_steps,
+                       flat(Ap2s), (episode_steps > 1) & history_valid)
     r, d = r.view(HZ, B), d.view(HZ, B)
-    v_boot = critic((critic_input_c if args.compile_more else _critic_input)(S, f, xi_n, g))
+    v_boot = critic((critic_input_c if args.compile_more and not diagnostics else _critic_input)(S, f, xi_n, g))
     # --cuda_graph: survival products as a loop (cumprod's backward reads the host)
     J, c_t, c = actor_objective(r, d, v_boot, args.gamma, loop_cumprod=GRAPH)
     r_sum = (c_t * r).detach().sum(0)
     rews, dones = r.detach(), d.detach()
     loss = -J.mean()
-    opt_pi.zero_grad(set_to_none=True)
-    loss.backward()
+    X = None
+    if critic_data:
+        with torch.no_grad():
+            S_c = tuple(torch.cat((S0[i].unsqueeze(0), torch.stack([St[i].detach() for St in Ss])), 0).flatten(0, 1) for i in range(len(S)))
+            f_c = torch.cat((s["f"].unsqueeze(0), torch.stack(Fs)), 0).flatten()
+            g_c = torch.cat((g0.unsqueeze(0), torch.stack(Gs)), 0).flatten(0, 1)
+            xi_c = xi_n.unsqueeze(0).expand(HZ + 1, -1, -1).flatten(0, 1)
+            X = critic_input_c(S_c, f_c, xi_c, g_c).view(HZ + 1, B, -1)
+    valid = None
+    if args.min_imagination_steps is not None:
+        remaining = motion.clip_end[motion.clip_id[s["f"]]] - s["f"]
+        valid = torch.arange(HZ + 1, device=dev)[:, None] <= remaining[None, :]
+    output = loss, r_sum, c, X, rews, dones, valid
+    if diagnostics:
+        _, detail = mdp.reward(S_all, f_all, flat(As), flat(Aps), terms=True, w_contact=args.contact_reward,
+                              smooth_valid=episode_steps > 0, a_prev2=flat(Ap2s),
+                              smooth_acc_valid=(episode_steps > 1) & history_valid)
+        discount = args.gamma ** torch.arange(HZ, device=dev, dtype=torch.float32).unsqueeze(-1)
+        weighted = lambda key: (discount * c_t * detail[key].view(HZ, B)).sum(0).mean()
+        names = ("body_pos_reward", "body_ori_reward", "body_linvel_reward", "body_angvel_reward",
+                 "root_pos_reward", "root_ori_reward", "action_rate_reward", "joint_limit_reward",
+                 "object_track", "hand_track_reward", "grasp_reward", "release_reward",
+                 "grasp_penalty", "drop_penalty", "place_penalty", "reach_root_penalty", "reach_hand_penalty",
+                 "gait_contact_penalty", "gait_motion_penalty", "gait_velocity_penalty")
+        losses = {key: weighted(key) * (1 if "penalty" in key else -1) for key in names}
+        losses["gait"] = weighted("gait_penalty")
+        losses["task_and_value"] = loss - losses["gait"]
+        losses["total"] = loss
+        return (*output, losses)
+    return output
+
+
+def reward_gradient_probe():
+    """Read-only attribution on 16 real starts; preserve RNG, gradients and module flags."""
+    from blinkmimic.training_control import evaluation_rng
+    params = list(wm_modules.parameters()) + list(critic.parameters())
+    flags = [p.requires_grad for p in params]
+    saved_grads = [p.grad for p in actor_params]
+    # --compile_more also wraps these shared bound methods.  The diagnostic
+    # batch has a different shape and requests reward details, so calling the
+    # wrappers here would compile new forward/backward graphs during a probe.
+    callables = [(obj, name, getattr(obj, name)) for obj, name in
+                 ((mdp, "obs"), (mdp, "reward"), (motion, "goal"))]
+    try:
+        for obj, name, fn in callables:
+            setattr(obj, name, getattr(fn, "_torchdynamo_orig_callable", fn))
+        with evaluation_rng(dev), torch.enable_grad():
+            *_, losses = imagine_actor(critic_data=False, diagnostics=True)
+            output, vectors = {}, {}
+            for key, value in losses.items():
+                grads = torch.autograd.grad(value, actor_params, retain_graph=True, allow_unused=True)
+                vector = torch.cat([g.detach().flatten() if g is not None else torch.zeros_like(p).flatten()
+                                    for g, p in zip(grads, actor_params)])
+                output[key] = dict(loss=float(value.detach()), gradnorm=float(vector.norm()),
+                                   finite=bool(torch.isfinite(vector).all()))
+                if key in ("gait", "task_and_value", "total"):
+                    vectors[key] = vector
+            a, b = vectors["gait"], vectors["task_and_value"]
+            output["task_gait_cosine"] = float(torch.dot(a, b) / (a.norm()*b.norm()).clamp(min=1e-20))
+            output["combined_fraction"] = float(vectors["total"].norm() / (a.norm()+b.norm()).clamp(min=1e-20))
+            output["batch"] = min(16, args.pi_batch)
+            return output
+    finally:
+        for obj, name, fn in callables:
+            setattr(obj, name, fn)
+        for p, flag in zip(params, flags):
+            p.requires_grad_(flag)
+        for p, grad in zip(actor_params, saved_grads):
+            p.grad = grad
+
+
+def step_actor():
     gn = nn.utils.clip_grad_norm_(actor_params, 1.0)
     if args.pi_clip_value > 0:
         nn.utils.clip_grad_value_(actor_params, args.pi_clip_value)
@@ -714,6 +803,12 @@ def policy_update():
             opt_pi.step(ok=finite)
     elif torch.isfinite(gn):
         opt_pi.step()
+    else:
+        NONFINITE.add_(1)
+    return gn
+
+
+def update_policy_average():
     if pi_avg is not None:
         if GRAPH and int(pi_avg.n_averaged) > 0:
             ema_update()
@@ -722,27 +817,33 @@ def policy_update():
         if VISION:
             with torch.no_grad():
                 torch._foreach_copy_(list(pi_avg.module.depth_enc.parameters()), list(pi.depth_enc.parameters()))
+
+
+def policy_update():
+    loss, r_sum, c, X, rews, dones, valid = imagine_actor()
+    opt_pi.zero_grad(set_to_none=True)
+    loss.backward()
+    gn = step_actor()
+    update_policy_average()
     set_requires_grad(wm_modules, True)
     set_requires_grad(critic, True)
     # ---------------- critic: GAE(lambda) targets over the imagined transitions ----------------
     v_loss = torch.zeros(())
-    with torch.no_grad():
-        S_c = tuple(torch.cat((S0[i].unsqueeze(0), torch.stack([St[i].detach() for St in Ss])), 0).flatten(0, 1) for i in range(len(S)))
-        f_c = torch.cat((s["f"].unsqueeze(0), torch.stack(Fs)), 0).flatten()
-        g_c = torch.cat((g0.unsqueeze(0), torch.stack(Gs)), 0).flatten(0, 1)
-        xi_c = xi_n.unsqueeze(0).expand(HZ + 1, -1, -1).flatten(0, 1)
-        X = critic_input_c(S_c, f_c, xi_c, g_c).view(HZ + 1, B, -1)
-    critic.norm.update(X)
+    critic.norm.update(X if valid is None else X[valid])
     with torch.no_grad():
         targets = (gae_targets_c if args.fused_adam else _gae_targets)(critic(X), rews, dones)  # (H, B)
     Xf, Yf = X[:-1].reshape(-1, X.shape[-1]), targets.reshape(-1)
+    # A transition starting at the terminal frame does not exist. Include the
+    # terminal state in normalization, but never fit repeated-tail GAE.
+    transitions = None if valid is None else valid[1:].reshape(-1)
     n = Xf.shape[0]
     mb = n // args.critic_minibatches
     for _ in range(args.critic_epochs):
         perm = torch.randperm(n, device=dev)
         for i in range(args.critic_minibatches):
             idx = perm[i * mb : (i + 1) * mb]
-            v_loss = (critic_loss_c if args.fused_adam else _critic_loss)(Xf[idx], Yf[idx])
+            loss_fn = critic_loss_c if args.fused_adam else _critic_loss
+            v_loss = loss_fn(Xf[idx], Yf[idx], None if transitions is None else transitions[idx])
             opt_v.zero_grad(set_to_none=True)
             v_loss.backward()
             v_gn = nn.utils.clip_grad_norm_(critic.parameters(), 1.0)
@@ -757,15 +858,15 @@ sim_cfg = make_sim(robot)
 if args.compile_more:
     # the simulator wrapper calls these once per control step in eager mode otherwise (FK + rotations: thousands of kernels)
     mdp.reward, mdp.termination, mdp.obs = reward_compile(mdp.reward), compile_fn(mdp.termination), compile_fn(mdp.obs)
-    mdp.goal = compile_fn(mdp.goal)
+    motion.goal = compile_fn(motion.goal)
 env = TrackingSim(sim_cfg, args.num_envs, robot, motion, mdp, dev, gamma=args.gamma, fail_reset=args.fail_reset,
-                  bin_fix=args.bin_fix, vision=VISION)
+                  bin_fix=args.bin_fix, vision=VISION, training_contact_reward=REAL_CONTACT,
+                  min_reset_steps=args.min_reset_steps)
 if INIT_BINS is not None:  # --resume: the checkpoint's reset-sampler statistics (episodes already running keep their start)
     env.bin_G.copy_(INIT_BINS["bin_G"]), env.bin_fail.copy_(INIT_BINS["bin_fail"]), env.bin_w_avg.copy_(INIT_BINS["bin_w_avg"])
 buffer = ReplayBuffer(args.buffer_steps, args.num_envs, dev, J, layout.dim,
                       mdp.obs_dim if pipe.stateful else None, pipe.state_dim if pipe.stateful else None,
                       object_state=OBJECT, vision=VISION)  # fmt: skip
-AMP_START_WEIGHTS = torch.empty(buffer.T * buffer.N, device=dev) if AMP_PRIOR else None
 obs_hist = torch.zeros(args.num_envs, Hh, mdp.obs_dim, device=dev)
 
 
@@ -779,7 +880,7 @@ def _collect_core():
     fresh = env.ep_step == 0
     oh = CG["obs_hist"]
     oh_new = torch.where(fresh[:, None, None], o.unsqueeze(1).expand_as(oh), torch.cat((oh[:, 1:], o.unsqueeze(1)), 1))
-    g = mdp.goal(env.state(), env.f, K)
+    g = motion.goal(env.f, K)
     pi.obs_norm.update(o)
     pi.goal_norm.update(g)
     a = pi(oh_new, g, depth=env.depth)
@@ -870,7 +971,7 @@ def collect(n_steps: int, stats: dict):
         o = env.observe()
         fresh = env.ep_step == 0
         obs_hist = torch.where(fresh[:, None, None], o.unsqueeze(1).expand_as(obs_hist), torch.cat((obs_hist[:, 1:], o.unsqueeze(1)), 1))
-        g = mdp.goal(env.state(), env.f, K)
+        g = motion.goal(env.f, K)
         pi.obs_norm.update(o)
         pi.goal_norm.update(g)
         a = pi(obs_hist, g, depth=env.depth)
@@ -885,7 +986,9 @@ def collect(n_steps: int, stats: dict):
         sim_steps += args.num_envs
         stats["r"].append(out["r"].mean() / MAX_REWARD)
         if args.profile and OBJECT:
-            profile_terms.append(torch.stack([out["terms"][k].mean() for k in PROFILE_TERMS]))
+            out["terms"]["action_saturation_fraction"] = (out["a"].abs() >= 20.).float().mean(-1)
+            values = torch.stack([out["terms"][k] for k in PROFILE_TERMS])
+            profile_terms.append(torch.cat((values.mean(-1), values.std(-1, unbiased=False))))
         if "ep_len" in out:
             stats["ep_len"].append(out["ep_len"].mean())
             stats["ep_ret"].append(out["ep_ret_norm"].mean())
@@ -933,7 +1036,7 @@ def eprobe_sweep_eager(n_steps, stop, fcap):
     for _ in range(n_steps):
         o = penv.observe()
         hist = o.unsqueeze(1).repeat(1, Hh, 1) if hist is None else torch.cat((hist[:, 1:], o.unsqueeze(1)), 1)
-        a = pi_avg.module(hist, mdp.goal(penv.state(), penv.f, K), depth=penv.depth)
+        a = pi_avg.module(hist, motion.goal(penv.f, K), depth=penv.depth)
         alive = ~penv.done_eval.clone()
         f_now = penv.f.clone()
         out = penv.step(a)
@@ -951,7 +1054,7 @@ EPG = {}  # --eprobe_graph: static tensors and the graph
 def _eprobe_step():
     o = penv.observe()
     h = torch.cat((EPG["hist"][:, 1:], o.unsqueeze(1)), 1)
-    a = EP_PI(h, mdp.goal(penv.state(), penv.f, K), depth=penv.depth)
+    a = EP_PI(h, motion.goal(penv.f, K), depth=penv.depth)
     alive = ~penv.done_eval.clone()
     f_now = penv.f.clone()
     out = penv.step(a)
@@ -1092,26 +1195,39 @@ def eprobe_finish(it, lead, t0, fail_f):
 
 
 stats = {"r": [], "ep_len": [], "ep_ret": [], "term": [], "done": []}
-print(f"[{time.strftime('%H:%M:%S')}] initial collection: {args.warmup_steps} vector steps", flush=True)
+probe = ValidationProbe(robot, kin, dev, layout.dim, vars(args)) if args.probe_minutes or args.probe_initial else None
+parameter_groups = {"actor": actor_params, "world_model": wm.parameters(), "critic": critic.parameters()}
+if VISION:
+    parameter_groups.update(depth_encoder=pi.depth_enc.parameters(), latent_decoder=latent_dec.parameters())
+parameter_updates = ParameterUpdates(parameter_groups) if probe is not None else None
+if args.probe_initial:
+    t_probe = time.monotonic()
+    initial = probe.run(pi_avg.module if pi_avg is not None and int(pi_avg.n_averaged) else pi)
+    initial.update(iteration=start_it, sim_steps=sim_steps, training_seconds=wall_offset,
+                   evaluation_seconds=time.monotonic() - t_probe)
+    initial["parameter_updates"] = parameter_updates.sample()
+    json.dump(initial, open(os.path.join(args.log_dir, "probe_initial.json"), "w"), indent=2)
+# The formal budget starts at the first real collection, including replay warmup.
+t_start = time.monotonic() - wall_offset
+training_started_epoch = time.time() - wall_offset
+heartbeat = TrainingHeartbeat(args.log_dir) if args.profile else None
+if heartbeat:
+    heartbeat.mark("warmup", start_it, sim_steps)
 collect(args.warmup_steps, stats)  # the replay buffer is not checkpointed, so a resumed run refills it too
-print(f"[{time.strftime('%H:%M:%S')}] initial collection complete", flush=True)
-if args.ckpt_initial and start_it == 0:
-    initial = {"pi": {k: v.detach().cpu().clone() for k, v in pi.state_dict().items()},
-               "iteration": 0, "wall_time": 0., "sim_steps": sim_steps, "args": vars(args),
-               "saved_at": time.strftime("%Y-%m-%d %H:%M:%S")}
-    if AMP_PRIOR:
-        initial["motion_prior"] = motion_prior.checkpoint(cpu=True)
-    torch.save(initial, os.path.join(args.log_dir, "ckpt_000000.pt"))
-profile_terms.clear()
+# Keep the warm-up reward terms until the first log: stats["r"] includes
+# these same transitions. Clearing only the terms would mix two windows.
 log_path = os.path.join(args.log_dir, "train_log.csv")
 new_log = not os.path.exists(log_path) or os.path.getsize(log_path) == 0
 log_f = open(log_path, "a")
 if new_log:
     log_f.write("iteration,wall_h,sim_steps,wm_loss,wm_err8,pi_loss,v_loss,imag_rew,pi_gradnorm,imag_survival,sim_rew,ep_len,ep_ret_norm,term_frac,it_per_s,lr"
                 ",pi_lr,pi_mult,nonfinite" + (",latent_loss,depth_recon" if VISION else "")
-                + ("," + ",".join("amp_" + key for key in AMP_LOG_KEYS) if AMP_PRIOR else "") + "\n")
+                + ("") + ",wm_updates,actor_updates\n")  # fmt: skip
     log_f.flush()
-LOG_EXTRA = "pi_lr" in open(log_path).readline()  # lr = base LR; pi_lr = policy LR (x pi_mult)
+with open(log_path) as stream:
+    log_columns = stream.readline().strip().split(",")
+LOG_EXTRA = "pi_lr" in log_columns  # lr = base LR; pi_lr = policy LR (x pi_mult)
+BUDGET_LOG = "wm_updates" in log_columns
 # --ckpt_light: one background writer; a failed write is re-raised in the training loop (or at the end), at most 2 queued
 CKPT_POOL, CKPT_PENDING = (ThreadPoolExecutor(max_workers=1) if args.ckpt_light else None), []
 
@@ -1122,11 +1238,23 @@ def ckpt_wait(drain=False):
 
 
 def _save_atomic(obj, path):
+    write_started = time.monotonic()
     torch.save(obj, path + ".tmp")
     os.replace(path + ".tmp", path)
+    with open(os.path.join(args.log_dir, "checkpoint_timings.jsonl"), "a") as stream:
+        stream.write(json.dumps({"iteration": obj["iteration"], "kind": "background_write", "path": path,
+                                 "duration_s": time.monotonic() - write_started}) + "\n")
 
 
-t_start = time.time() - wall_offset
+def _retain_full_checkpoint(last, path):
+    """Keep the published full state when a later save replaces last.pt."""
+    temporary = path + ".tmp"
+    if os.path.exists(temporary):
+        os.remove(temporary)
+    os.link(last, temporary)
+    os.replace(temporary, path)
+
+
 STOP_REQUESTED = False
 
 
@@ -1137,8 +1265,8 @@ def request_checkpoint_stop(signum, frame):
 
 signal.signal(signal.SIGUSR1, request_checkpoint_stop)
 if args.max_hours is not None:
-    deadline = t_start + args.max_hours * 3600
-    json.dump({"started_at": t_start, "deadline": deadline, "max_hours": args.max_hours,
+    deadline = training_started_epoch + args.max_hours * 3600
+    json.dump({"started_at": training_started_epoch, "deadline": deadline, "max_hours": args.max_hours,
                "start_iteration": start_it}, open(os.path.join(args.log_dir, "run_timing.json"), "w"), indent=2)
     print(f"training deadline: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(deadline))}", flush=True)
 next_ckpt_s = wall_offset + args.ckpt_minutes * 60
@@ -1146,12 +1274,27 @@ t_log = time.time()
 profile_steps = sim_steps
 profile_path = os.path.join(args.log_dir, "diagnostics.csv")
 if args.profile:
+    expected_header = ("iteration,env_steps_per_s,collect_ms,wm_ms,policy_ms,wm_gradnorm,critic_gradnorm,peak_allocated_gb,device_used_gb" +
+                       ("," + ",".join(PROFILE_COLUMNS) if OBJECT else "") + ",logging_ms,memory_query_ms\n")
+    if os.path.exists(profile_path):
+        with open(profile_path) as stream:
+            if stream.readline() != expected_header:
+                profile_path = os.path.join(args.log_dir, "diagnostics_gait_v1.csv")
     profile_log = open(profile_path, "a")
+    profile_timing_columns = True
     if profile_log.tell() == 0:
-        profile_log.write("iteration,env_steps_per_s,collect_ms,wm_ms,policy_ms,wm_gradnorm,critic_gradnorm,peak_allocated_gb,device_used_gb" +
-                          ("," + ",".join(PROFILE_TERMS) if OBJECT else "") + "\n")
+        profile_log.write(expected_header)
+    else:
+        with open(profile_path) as stream:
+            profile_timing_columns = "logging_ms" in stream.readline().strip().split(",")
+    profile_window_start = time.monotonic()
+    memory_sample_time, device_used_gb = -float("inf"), 0.
 step_acc = 0.0
-waiting_for_amp_starts = False
+budget = TransitionBudget(args.wm_update_interval, args.policy_warmup_steps,
+                          (RESUME_CTRL or {}).get("wm_updates", 0))
+actor_updates = (RESUME_CTRL or {}).get("actor_updates", 0)
+next_probe_s = wall_offset + args.probe_minutes * 60
+last_wm_loss, last_wm_error = torch.zeros((), device=dev), torch.zeros((), device=dev)
 agg = {"wm": [], "wm8": [], "pi": [], "v": [], "ir": [], "gn": [], "surv": []}
 # first iteration with a policy update (after --wm_only_iters); a resumed run is past it
 POLICY_START = args.wm_only_iters if (start_it > 0 or args.wm_only_iters == 0) else None
@@ -1166,8 +1309,7 @@ if RESUME_CTRL is not None:
 
 
 for it in range(start_it, args.iterations):
-    if it == start_it:
-        print(f"[{time.strftime('%H:%M:%S')}] first collect/WM/discriminator update", flush=True)
+    actor_ready = budget.ready(sim_steps, it, args.wm_only_iters)
     lr = lr_at(it)
     pi_mult = args.pi_lr_mult  # --lr_decay_ret: ramps to 1 after the trigger
     if DECAY_AT[0] is not None:
@@ -1192,74 +1334,93 @@ for it in range(start_it, args.iterations):
     if args.profile:
         events = [torch.cuda.Event(enable_timing=True) for _ in range(4)]
         events[0].record()
+    if heartbeat:
+        heartbeat.mark("collect", it + 1, sim_steps)
     collect(n, stats)
     if args.profile:
         events[1].record()
-    for _ in range(args.wm_batches):
-        l, e8 = wm_update_g()
-    agg["wm"].append(l), agg["wm8"].append(e8)
-    if AMP_PRIOR:
-        metrics = disc_updates.update(buffer)
-        amp_stats.append(torch.stack([metrics[key] for key in AMP_LOG_KEYS]))
-    if it == start_it:
-        print(f"[{time.strftime('%H:%M:%S')}] first WM/discriminator update complete", flush=True)
+    if heartbeat:
+        heartbeat.mark("world_model", it + 1, sim_steps)
+    for _ in range(budget.due(sim_steps, args.wm_batches)):
+        last_wm_loss, last_wm_error = wm_update_g()
+        budget.updates += 1
+    agg["wm"].append(last_wm_loss), agg["wm8"].append(last_wm_error)
     if args.profile:
         events[2].record()
-    if POLICY_START is None and it + 1 >= args.wm_only_iters:
-        POLICY_START = args.wm_only_iters
+    if POLICY_START is None and actor_ready:
+        POLICY_START = it
         print(f"policy updates start at iteration {POLICY_START}", flush=True)
         open(os.path.join(args.log_dir, "policy_start.txt"), "w").write(f"{POLICY_START}\n")
-    if POLICY_START is not None and it >= POLICY_START:
-        ready = True
-        if AMP_PRIOR:
-            # Check before sampling/capture: small buffers can contain only clip tails.
-            # Keep the weights' storage stable for a captured policy update.
-            AMP_START_WEIGHTS.copy_(buffer.horizon_start_weights(motion, HZ))
-            ready = bool(AMP_START_WEIGHTS.any())
-            if not ready and not waiting_for_amp_starts:
-                print("AMP: no full-horizon start in replay; continuing collection, WM and discriminator updates", flush=True)
-            elif ready and waiting_for_amp_starts:
-                print("AMP: full-horizon starts available; resuming actor/critic updates", flush=True)
-            waiting_for_amp_starts = not ready
-        if ready:
-            n_avg0 = int(pi_avg.n_averaged) if pi_avg is not None else 0
-            pl, vl, ir, gn, surv = policy_update_g()
-            if GRAPH and pi_avg is not None and int(pi_avg.n_averaged) == n_avg0:
-                pi_avg.n_averaged += 1  # ema_update (and a graph replay) does not advance the host-side counter
-            agg["pi"].append(pl), agg["v"].append(vl), agg["ir"].append(ir), agg["gn"].append(gn), agg["surv"].append(surv)
+    if actor_ready:
+        if heartbeat:
+            heartbeat.mark("policy_critic", it + 1, sim_steps)
+        n_avg0 = int(pi_avg.n_averaged) if pi_avg is not None else 0
+        pl, vl, ir, gn, surv = policy_update_g()
+        actor_updates += 1
+        if GRAPH and pi_avg is not None and int(pi_avg.n_averaged) == n_avg0:
+            pi_avg.n_averaged += 1  # ema_update (and a graph replay) does not advance the host-side counter
+        agg["pi"].append(pl), agg["v"].append(vl), agg["ir"].append(ir), agg["gn"].append(gn), agg["surv"].append(surv)
     if args.profile:
         events[3].record()
         profile_times.append(events)
+    if heartbeat:
+        heartbeat.mark("logging", it + 1, sim_steps)
+    elapsed = time.monotonic() - t_start
+    probe_due = (probe is not None and args.probe_minutes > 0 and elapsed >= next_probe_s
+                 and (args.max_hours is None or elapsed < args.max_hours * 3600))
+    if probe_due:
+        if heartbeat:
+            heartbeat.mark("validation", it + 1, sim_steps)
+        t_probe = time.monotonic()
+        result = probe.run(pi_avg.module if pi_avg is not None and int(pi_avg.n_averaged) else pi)
+        if buffer.size >= HZ:
+            result["world_model"] = world_model_probe(wm, pi.depth_enc if VISION else None,
+                                                     buffer, normalize_xi, dev, kin=kin, horizon=HZ)
+        if OBJECT and args.carry_gait_profile != "legacy" and actor_updates:
+            result["reward_gradients"] = reward_gradient_probe()
+        result["parameter_updates"] = parameter_updates.sample()
+        result.update(iteration=it + 1, sim_steps=sim_steps, training_seconds=time.monotonic() - t_start,
+                      evaluation_seconds=time.monotonic() - t_probe)
+        json.dump(result, open(os.path.join(args.log_dir, f"probe_{it + 1:06d}.json"), "w"), indent=2)
+        print(f"[probe] it {it + 1} success={result['success_rate']:.3f} task={result['task_norm_return']:.3f} "
+              f"drops={result['failure_causes']['box_drop']} wall={result['evaluation_seconds']:.1f}s", flush=True)
+        next_probe_s = (int((time.monotonic() - t_start) // (args.probe_minutes * 60)) + 1) * args.probe_minutes * 60
     if (it + 1) % args.log_every == 0:
-        mean = lambda x: float(sum(float(v) for v in x) / max(len(x), 1))  # noqa: E731
-        mean_nn = lambda x: mean([v for v in (float(v) for v in x) if v == v])  # noqa: E731  (--reset_masked: NaN = no end)
+        logging_started = time.monotonic()
+        memory_query_ms = 0.
         ips = args.log_every / (time.time() - t_log)
         if args.profile:
             torch.cuda.synchronize()
-            elapsed = time.time() - t_log
-            timings = [sum(es[j].elapsed_time(es[j + 1]) for es in profile_times) / len(profile_times) for j in range(3)]
-            diagnostic = [it + 1, (sim_steps - profile_steps) / elapsed, *timings, *HEALTH_STATS.tolist(),
+            timings = [sum(es[j].elapsed_time(es[j + 1]) for es in profile_times) / len(profile_times)
+                       for j in ((0, 1, 2))]
+            diagnostic = [it + 1, 0., *timings, *HEALTH_STATS.tolist(),
                           torch.cuda.max_memory_allocated() / 2**30]
-            free_memory, total_memory = torch.cuda.mem_get_info()
-            diagnostic.append((total_memory - free_memory) / 2**30)
+            # cudaMemGetInfo can wait on allocations by other GPU contexts.
+            # Sample at a wall-clock cadence, independent of algorithm iteration length.
+            if time.monotonic() - memory_sample_time >= 30:
+                query_started = time.monotonic()
+                free_memory, total_memory = torch.cuda.mem_get_info()
+                memory_query_ms = (time.monotonic() - query_started) * 1000
+                device_used_gb = (total_memory - free_memory) / 2**30
+                memory_sample_time = time.monotonic()
+            diagnostic.append(device_used_gb)
             if OBJECT:
                 diagnostic += torch.stack(profile_terms).mean(0).tolist()
-            profile_log.write(",".join(str(x) for x in diagnostic) + "\n")
-            profile_log.flush()
             profile_terms.clear()
             profile_times.clear()
-            profile_steps = sim_steps
         t_log = time.time()
-        wall_h = (time.time() - t_start) / 3600
-        term_frac = float(sum(float(v) for v in stats["term"]) / max(sum(float(v) for v in stats["done"]), 1))
-        row = [it + 1, wall_h, sim_steps, mean(agg["wm"]), mean(agg["wm8"]), mean(agg["pi"]), mean(agg["v"]), mean(agg["ir"]),
-               mean(agg["gn"]), mean(agg["surv"]), mean(stats["r"]), mean_nn(stats["ep_len"]), mean_nn(stats["ep_ret"]), term_frac, ips, lr]  # fmt: skip
+        wall_h = (time.monotonic() - t_start) / 3600
+        summaries = training_summaries(agg, stats, dev)
+        term_frac = summaries[10] / max(summaries[11], 1)
+        row = [it + 1, wall_h, sim_steps, *summaries[:10], term_frac, ips, lr]
+        if (int(NONFINITE) or not all(math.isfinite(row[i]) for i in (3, 4, 5, 6, 7, 8, 9, 10))
+                or (args.profile and not bool(torch.isfinite(HEALTH_STATS).all()))):
+            raise FloatingPointError("Non-finite training loss/gradient; stop this attempt before further updates")
         extra = [lr * pi_mult, float(pi_mult), int(NONFINITE)] if LOG_EXTRA else []
         if VISION:
             extra += VISION_STATS.tolist()
-        if AMP_PRIOR:
-            extra += torch.stack(amp_stats).mean(0).tolist()
-            amp_stats.clear()
+        if BUDGET_LOG:
+            extra += [budget.updates, actor_updates]
         log_f.write(",".join(f"{x:.6g}" if isinstance(x, float) else str(x) for x in row + extra) + "\n")
         deadline = args.lr_decay_by > 0 and it + 1 >= args.lr_decay_by
         if args.lr_decay_ret > 0 and DECAY_AT[0] is None and (row[12] >= args.lr_decay_ret or deadline):
@@ -1269,51 +1430,67 @@ for it in range(start_it, args.iterations):
         log_f.flush()
         print(f"it {it + 1} | {wall_h:.3f} h | wm {row[3]:.4f} e8 {row[4]:.4f} | pi {row[5]:.3f} v {row[6]:.4f} imag_r {row[7]:.3f} surv {row[9]:.3f} "
               f"| sim_r {row[10]:.3f} ep_len {row[11]:.1f} ep_ret {row[12]:.3f} term {term_frac:.2f} | {ips:.2f} it/s", flush=True)  # fmt: skip
-        if AMP_PRIOR:
-            print(f"AMP updates {disc_updates.updates} | D expert {float(metrics['expert_score']):.3f} "
-                  f"policy {float(metrics['policy_score']):.3f} loss {float(metrics['disc_loss']):.4f}", flush=True)
+        if args.profile:
+            profile_now = time.monotonic()
+            diagnostic[1] = (sim_steps - profile_steps) / (profile_now - profile_window_start)
+            timing_values = [(profile_now - logging_started) * 1000, memory_query_ms]
+            if profile_timing_columns:
+                diagnostic += timing_values
+            else:  # keep a pre-existing CSV schema intact when resuming an older run
+                with open(os.path.join(args.log_dir, "logging_timings.jsonl"), "a") as stream:
+                    stream.write(json.dumps({"iteration": it + 1, "logging_ms": timing_values[0],
+                                             "memory_query_ms": timing_values[1]}) + "\n")
+            profile_window_start, profile_steps = profile_now, sim_steps
+            profile_log.write(",".join(str(x) for x in diagnostic) + "\n")
+            profile_log.flush()
         stats = {k: [] for k in stats}
         agg = {k: [] for k in agg}
-    wall = time.time() - t_start
+    wall = time.monotonic() - t_start
     out_of_time = args.max_hours is not None and wall >= args.max_hours * 3600
-    timed = args.ckpt_minutes > 0 and wall >= next_ckpt_s
+    timed = (args.ckpt_minutes > 0 and wall >= next_ckpt_s) or probe_due
     if timed:
         next_ckpt_s += args.ckpt_minutes * 60
     final_ck = it + 1 == args.iterations or out_of_time or STOP_REQUESTED
-    if args.ckpt_light and not final_ck and ((it + 1) % args.ckpt_every == 0 or timed):
+    if heartbeat:
+        heartbeat.mark("checkpoint", it + 1, sim_steps)
+    checkpoint_started = time.monotonic()
+    checkpoint_kind = None
+    if args.ckpt_light and not final_ck and not timed and (it + 1) % args.ckpt_every == 0:
         sd = pi_avg.module.state_dict() if pi_avg is not None else pi.state_dict()
         small = {"pi": {k: v.detach().to("cpu", copy=True) for k, v in sd.items()}, "iteration": it + 1,
-                 "wall_time": time.time() - t_start, "sim_steps": sim_steps, "args": vars(args),
+                 "wall_time": time.monotonic() - t_start, "sim_steps": sim_steps, "args": vars(args),
                  "saved_at": time.strftime("%Y-%m-%d %H:%M:%S")}  # fmt: skip
-        if AMP_PRIOR:
-            small["motion_prior"] = motion_prior.checkpoint(cpu=True)
         path = os.path.join(args.log_dir, f"ckpt_{it + 1:06d}.pt")
         ckpt_wait()
         CKPT_PENDING.append(CKPT_POOL.submit(_save_atomic, small, path))
+        checkpoint_kind = "light_submit"
     elif (it + 1) % args.ckpt_every == 0 or it + 1 == args.iterations or timed or out_of_time or STOP_REQUESTED:
         ck = {"wm": wm.state_dict(), "pi": pi_avg.module.state_dict() if pi_avg is not None else pi.state_dict(), "pi_live": pi.state_dict(), "critic": critic.state_dict(), "opt_wm": opt_wm.state_dict(),
               "opt_pi": opt_pi.state_dict(), "opt_v": opt_v.state_dict(), "iteration": it + 1,
-              "wall_time": time.time() - t_start, "sim_steps": sim_steps, "args": vars(args),
+              "wall_time": time.monotonic() - t_start, "sim_steps": sim_steps, "args": vars(args),
               "pi_avg": pi_avg.state_dict() if pi_avg is not None else None,
               "saved_at": time.strftime("%Y-%m-%d %H:%M:%S")}  # fmt: skip
-        ck["ctrl"] = {"decay_at": DECAY_AT[0], "ep_fail": EP_FAIL.cpu() if EPROBE else None,
+        ck["ctrl"] = {"decay_at": DECAY_AT[0], "wm_updates": budget.updates, "actor_updates": actor_updates,
+                      "ep_fail": EP_FAIL.cpu() if EPROBE else None,
                       "focus_q": env.focus_q.cpu() if env.focus_q is not None else None,
                       "focus_share": float(env.focus_share_t) if env.focus_static else env.focus_share,
                       "env_bins": {"bin_G": env.bin_G.cpu(), "bin_fail": env.bin_fail.cpu(), "bin_w_avg": env.bin_w_avg.cpu()}}  # fmt: skip
         if VISION:
             ck["latent_dec"] = latent_dec.state_dict()
-        if AMP_PRIOR:
-            ck["motion_prior"] = motion_prior.checkpoint()
-            ck.update(disc_updates.checkpoint())
         last = os.path.join(args.log_dir, "last.pt")
         torch.save(ck, last + ".tmp")
         os.replace(last + ".tmp", last)
+        _retain_full_checkpoint(last, os.path.join(args.log_dir, f"full_{it + 1:06d}.pt"))
         small = {k: ck[k] for k in ("pi", "pi_live", "wm", "iteration", "wall_time", "sim_steps", "args", "saved_at")}
-        if AMP_PRIOR:
-            small["motion_prior"] = ck["motion_prior"]
         path = os.path.join(args.log_dir, f"ckpt_{it + 1:06d}.pt")
         torch.save(small, path + ".tmp")
         os.replace(path + ".tmp", path)
+        checkpoint_kind = "full"
+    if checkpoint_kind is not None:
+        with open(os.path.join(args.log_dir, "checkpoint_timings.jsonl"), "a") as stream:
+            stream.write(json.dumps({"iteration": it + 1, "kind": checkpoint_kind,
+                                     "duration_s": time.monotonic() - checkpoint_started,
+                                     "training_seconds": time.monotonic() - t_start}) + "\n")
     if out_of_time:
         print(f"time budget of {args.max_hours} h reached at it {it + 1}", flush=True)
         break
@@ -1323,3 +1500,6 @@ for it in range(start_it, args.iterations):
 if CKPT_POOL is not None:  # every background checkpoint written (a failed write raises here: non-zero exit)
     ckpt_wait(drain=True)
     CKPT_POOL.shutdown()
+if heartbeat:
+    heartbeat.mark("finished", it + 1, sim_steps)
+    heartbeat.close()

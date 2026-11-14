@@ -7,8 +7,6 @@ Inputs:  obs_history (1, H, O)  raw observations, oldest first, layout of blinkm
                                 q - q0, qd, root angular velocity (root frame), projected gravity,
                                 previous action, reference-relative root orientation (6D)
          time_step   (1, 1)     reference frame at 50 Hz from the start of the motion (float)
-         root_pos_w  (1, 3)     current robot root position in the motion's world frame;
-                                required only for carry_goal_anchor=robot checkpoints
 Outputs: actions (1, J)         joint targets are q0 + action_scale * actions
          joint_pos, joint_vel (1, J), body_pos_w, body_quat_w (wxyz), body_lin_vel_w, body_ang_vel_w
                                 (1, B, .): the reference at time_step (tracked bodies, body 0 = root)
@@ -32,9 +30,9 @@ import blinkmimic.networks as networks
 from blinkmimic.kinematics import Kinematics
 from blinkmimic.mdp import obs_dim
 from blinkmimic.motion import CONTROL_DT, MotionLib
-from blinkmimic.networks import Policy, policy_kwargs
+from blinkmimic.networks import check_pruned, make_policy
 from blinkmimic.robot import RobotSpec, get_robot
-from blinkmimic.rotations import mat_to_quat, mv3, yaw_mat
+from blinkmimic.rotations import mat_to_quat
 from blinkmimic.box_carry import CarryMotionLib, robot_spec
 from blinkmimic.vision import DEPTH_SHAPE, DEPTH_NEAR, DEPTH_FAR
 
@@ -42,24 +40,11 @@ OUTPUTS = ["actions", "joint_pos", "joint_vel", "body_pos_w", "body_quat_w", "bo
 
 
 class PolicyWithMotion(nn.Module):
-    def __init__(self, pi: Policy, motion: MotionLib, K: int, goal_anchor="reference"):
+    def __init__(self, pi: nn.Module, motion: MotionLib, K: int):
         super().__init__()
         self.pi = pi
         f = torch.arange(motion.num_frames)
         self.register_buffer("goal", motion.goal(f, K))
-        self.goal_anchor = goal_anchor
-        if goal_anchor == "robot":
-            self.register_buffer("ref_root_p", motion.root_p)
-            self.register_buffer("ref_yaw_t", yaw_mat(motion.root_R).transpose(-1, -2))
-            # Only root/object position slots change origin. All other reference features stay identical.
-            position_map = self.goal.new_zeros(3, motion.goal_dim(K))
-            frame_dim = 15 + 2 * motion.q.shape[-1]
-            for k in range(K):
-                position_map[:, k * frame_dim:k * frame_dim + 3] = torch.eye(3)
-                if isinstance(motion, CarryMotionLib):
-                    start = K * frame_dim + k * 17
-                    position_map[:, start:start + 3] = torch.eye(3)
-            self.register_buffer("goal_position_map", position_map)
         self.register_buffer("q", motion.q)
         self.register_buffer("qd", motion.qd)
         self.register_buffer("body_p", motion.body_p)
@@ -68,17 +53,10 @@ class PolicyWithMotion(nn.Module):
         self.register_buffer("body_w", motion.body_w)
         self.last = motion.num_frames - 1
 
-    def forward(self, obs_history: torch.Tensor, time_step: torch.Tensor, depth: torch.Tensor | None = None,
-                root_pos_w: torch.Tensor | None = None):
+    def forward(self, obs_history: torch.Tensor, time_step: torch.Tensor, depth: torch.Tensor | None = None):
         f = time_step.round().long().clamp(0, self.last).reshape(-1)
         f1 = (f + 1).clamp(max=self.last)
-        goal = self.goal[f]
-        if self.goal_anchor == "robot":
-            if root_pos_w is None:
-                raise ValueError("carry_goal_anchor=robot requires root_pos_w in the motion's world frame")
-            offset = mv3(self.ref_yaw_t[f], self.ref_root_p[f] - root_pos_w)
-            goal = goal + offset @ self.goal_position_map
-        a = self.pi(obs_history, goal, depth=depth)
+        a = self.pi(obs_history, self.goal[f], depth=depth)
         return a, self.q[f], self.qd[f], self.body_p[f], self.body_quat[f], self.body_v[f], self.body_w[f], self.body_quat[f1, 0]
 
 
@@ -101,7 +79,8 @@ def main():
 
     dev = "cpu"
     robot = get_robot(a.robot)
-    ck = torch.load(a.ckpt, map_location=dev)
+    ck = torch.load(a.ckpt, map_location=dev, weights_only=False)
+    check_pruned(ck["args"], nets_only=True, what=a.ckpt)
     task = ck["args"].get("task", "tracking")
     visual = ck["args"].get("vision", "none") == "latent"
     if task == "box_carry":
@@ -110,20 +89,17 @@ def main():
     kin = Kinematics(robot, dev)
     motion = (CarryMotionLib.from_file(a.motion, robot, kin, dev) if task == "box_carry" else
               MotionLib([a.motion], kin, dev, robot.load_motion))
+    motion.configure_goal_sampling(ck["args"])
     networks.AMP_DTYPE = None  # fp32 graph (training ran the MLPs under bf16 autocast)
-    widths = lambda key: tuple(int(x) for x in ck["args"].get(key, "2048,1024,512,256").split(","))  # noqa: E731
-    pi = Policy(obs_dim(robot.num_joints), motion.goal_dim(K), robot.num_joints, hist=Hh, enc_hidden=widths("enc_hidden"),
-                dec_hidden=widths("dec_hidden"), **policy_kwargs(ck["args"], robot))  # fmt: skip
+    pi = make_policy(obs_dim(robot.num_joints), motion.goal_dim(K), robot.num_joints, robot, ck["args"])
     pi.load_state_dict(ck["pi"])
-    goal_anchor = ck["args"].get("carry_goal_anchor", "reference") if task == "box_carry" else "reference"
-    model = PolicyWithMotion(pi, motion, K, goal_anchor).eval()
+    model = PolicyWithMotion(pi, motion, K).eval()
 
     obs = torch.zeros(1, Hh, obs_dim(robot.num_joints))
     t = torch.zeros(1, 1)
     depth = torch.zeros(1, *DEPTH_SHAPE)
-    root_pos = motion.root_p[:1].clone()
-    inputs = (obs, t, depth if visual else None, root_pos) if goal_anchor == "robot" else ((obs, t, depth) if visual else (obs, t))
-    names = ["obs_history", "time_step"] + (["depth"] if visual else []) + (["root_pos_w"] if goal_anchor == "robot" else [])
+    inputs = (obs, t, depth) if visual else (obs, t)
+    names = ["obs_history", "time_step"] + (["depth"] if visual else [])
     torch.onnx.export(model, inputs, a.out, input_names=names, output_names=OUTPUTS,
                       opset_version=18, dynamo=False)  # fmt: skip
 
@@ -132,9 +108,8 @@ def main():
     meta = {
         "run_path": os.path.abspath(a.ckpt),
         "task": task,
-        "imitation_mode": ck["args"].get("imitation_mode", "tracking"),
-        "carry_goal_anchor": goal_anchor,
-        "root_pos_w_frame": "reference motion world frame" if goal_anchor == "robot" else "",
+        "algorithm": ck["args"].get("algorithm", "bptt"),
+        "carry_reward_profile": ck["args"].get("carry_reward_profile", "legacy"),
         "vision": "latent" if visual else "none",
         "depth_shape": ",".join(str(n) for n in DEPTH_SHAPE) if visual else "",
         "depth_range_m": f"{DEPTH_NEAR},{DEPTH_FAR}" if visual else "",
@@ -149,7 +124,7 @@ def main():
         "observation_names": "joint_pos,joint_vel,base_ang_vel,projected_gravity,actions,motion_anchor_ori_b",
         "observation_history": str(Hh),
         "goal_frames": str(K),
-        "reference_horizon_s": str(K * CONTROL_DT),
+        "goal_frame_offsets": ",".join(str(n) for n in motion.goal_offsets.tolist()),
         "control_dt": str(CONTROL_DT),
         "anchor_body_name": robot.tracked_bodies[0],
         "body_names": ",".join(robot.tracked_bodies),
@@ -174,13 +149,10 @@ def main():
             o = pi.obs_norm.mean + pi.obs_norm.std() * torch.randn(1, Hh, obs.shape[-1])
             t = torch.tensor([[float(f)]])
             d = torch.rand_like(depth)
-            root_pos = motion.root_p[f:f + 1] + torch.randn(1, 3) * .5
-            ref = model(o, t, d if visual else None, root_pos if goal_anchor == "robot" else None)
+            ref = model(o, t, d if visual else None)
             feed = {"obs_history": o.numpy(), "time_step": t.numpy()}
             if visual:
                 feed["depth"] = d.numpy()
-            if goal_anchor == "robot":
-                feed["root_pos_w"] = root_pos.numpy()
             out = sess.run(None, feed)
             err = max(err, max((torch.from_numpy(x) - r).abs().max().item() for x, r in zip(out, ref)))
     print(f"ONNX vs torch (fp32), 64 random frames: max abs diff {err:.2e}")

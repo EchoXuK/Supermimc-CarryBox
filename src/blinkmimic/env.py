@@ -111,7 +111,7 @@ class TrackingSim:
     def __init__(self, sim_cfg: SimulationCfg, num_envs: int, robot: RobotSpec, motion: MotionLib, mdp: MDP,
                  device: str, gamma: float = 0.99, eval_mode: bool = False, max_episode_steps: int = 500,
                  reset_noise: bool = True, randomize: bool | None = None, fail_reset: float = 0.0, bin_fix: bool = False,
-                 vision: bool = False):  # fmt: skip
+                 vision: bool = False, training_contact_reward: float = 0., min_reset_steps: int = 1):  # fmt: skip
         """``randomize`` (default: not eval_mode) switches domain randomization, observation noise and
         delay, and pushes; ``eval_mode`` switches evaluation bookkeeping (no auto-reset, episode starts
         exactly on the reference)."""
@@ -127,6 +127,12 @@ class TrackingSim:
         self.spec = robot
         self.motion, self.mdp, self.gamma = motion, mdp, gamma
         self.eval_mode = eval_mode
+        if min_reset_steps < 1:
+            raise ValueError("min_reset_steps must be positive")
+        self.min_reset_steps = min_reset_steps if not eval_mode else 1
+        if self.min_reset_steps > 1:
+            self.reset_bin_end, self.reset_bin_prior = motion.reset_sampling(self.min_reset_steps)
+        self.training_contact_reward = 0. if eval_mode else training_contact_reward
         self.randomize = (not eval_mode) if randomize is None else randomize
         self.max_episode_steps = max_episode_steps if not eval_mode else 10**9
         self.reset_noise = reset_noise and not eval_mode
@@ -141,6 +147,8 @@ class TrackingSim:
         self.randomizer = DomainRandomizer(robot, self.layout, self, eval_mode=not self.randomize)
         self.randomizer.startup(self.xi)
         self.max_step_reward = getattr(mdp, "max_step_reward", MAX_STEP_REWARD)
+        if getattr(mdp, "gait_profile", "legacy") == "legacy":
+            self.max_step_reward += 2 * self.training_contact_reward * CONTROL_DT
         self.camera = None
         self.depth = None
         if vision:
@@ -179,6 +187,8 @@ class TrackingSim:
         self.bin_G = torch.full((motion.num_bins,), 0.0, device=dev)
         self.bin_w_avg = (motion.bin_prior.clone() if self.carry else
                           torch.full((motion.num_bins,), 1.0 / motion.num_bins, device=dev))
+        if self.min_reset_steps > 1:
+            self.bin_w_avg.copy_(self.reset_bin_prior)
         # InstantTrack: share of resets sent one bin before recent failure points (per-bin termination rate)
         self.fail_reset = fail_reset
         # index_put_ with duplicate bin indices keeps one arbitrary episode per bin and step (undefined
@@ -248,9 +258,13 @@ class TrackingSim:
         """``gate`` (reset_masked): a 0-dim bool; the running average bin_w_avg only advances where it is true (the
         eager reset samples only when an episode ended)."""
         m = self.motion
-        prior = getattr(m, "bin_prior", 1. / m.num_bins)
-        soft = torch.softmax(-25.0 * self.bin_G / self.G_max, 0)
-        if self.carry:
+        restricted = self.min_reset_steps > 1
+        prior = self.reset_bin_prior if restricted else getattr(m, "bin_prior", 1. / m.num_bins)
+        logits = -25.0 * self.bin_G / self.G_max
+        if restricted:
+            logits = logits.masked_fill(prior == 0, -float("inf"))
+        soft = torch.softmax(logits, 0)
+        if self.carry or restricted:
             soft = soft * prior
             soft = soft / soft.sum()
         if gate is None:
@@ -266,9 +280,16 @@ class TrackingSim:
             probs = (1 - self.focus_share_t) * probs + self.focus_share_t * self.focus_q
         elif self.focus_q is not None and self.focus_share > 0:
             probs = (1 - self.focus_share) * probs + self.focus_share * self.focus_q
+        if restricted:
+            # Failure/focus mixtures may point at a cropped tail. All sampling
+            # branches must obey the same reference window, including restores.
+            probs = probs * (prior > 0)
+            total = probs.sum()
+            probs = torch.where(total > 0, probs / total.clamp(min=1e-20), prior)
         bins = torch.multinomial(probs, n, replacement=True)
         start = m.bin_start[bins]
-        end = torch.minimum(start + 50, m.clip_end[m.bin_clip[bins]])  # keep >= 1 step before the clip end
+        end = (self.reset_bin_end[bins] if restricted else
+               torch.minimum(start + 50, m.clip_end[m.bin_clip[bins]]))
         f = start + (torch.rand(n, device=self.device) * (end - start).float()).long()
         return f, bins
 
@@ -452,7 +473,7 @@ class TrackingSim:
         ids = due.nonzero(as_tuple=False).squeeze(-1)
         if len(ids) > 0:
             c = self.spec.dr
-            _, _, v, w, _, _ = self.state()
+            v, w = self.state()[2:4]
             kick = torch.stack([torch.empty(len(ids), device=self.device).uniform_(-h, h) for h in c.push_velocity], -1)
             vel = torch.cat((v[ids], w[ids]), -1) + kick
             self.robot.write_root_link_velocity_to_sim(vel, env_ids=ids)
@@ -471,6 +492,9 @@ class TrackingSim:
     def step_core(self, a: torch.Tensor) -> dict:
         """The step up to the episode ends: no host synchronization (pushes aside), so it can be captured in a CUDA
         graph (train.py --collect_graph). The simulator wrapper rebinds f, ep_step and a_prev."""
+        # All callers, including standalone evaluation and video recording, use
+        # the same action in PD control, rewards and the next observation.
+        a = a.clamp(-20.0, 20.0)
         if (self.pipe.stateful or self.camera is not None) and self._obs is None:
             self.observe()
         o, o_state = self._obs, self._obs_state
@@ -494,8 +518,9 @@ class TrackingSim:
         S1 = self.state()
         f1 = f + 1
         reward_options = {"smooth_valid": ep_step > 0, "a_prev2": a_prev2,
-                          "smooth_acc_valid": ep_step > 1, "previous_state": S} if self.carry else {}
-        r, terms = self.mdp.reward(S1, f1, a, a_prev, terms=True, **reward_options)
+                          "smooth_acc_valid": ep_step > 1} if self.carry else {}
+        r, terms = self.mdp.reward(S1, f1, a, a_prev, terms=True,
+                                   w_contact=self.training_contact_reward, **reward_options)
         term = self.mdp.termination(S1, f1)
         clip_end = self.motion.clip_end[self.motion.clip_id[f]]
         timeout = (f1 >= clip_end) | (ep_step + 1 >= self.max_episode_steps)

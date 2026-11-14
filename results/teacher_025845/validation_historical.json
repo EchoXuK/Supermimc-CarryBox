@@ -1,0 +1,69 @@
+{
+  "split": "val",
+  "iteration": 25845,
+  "training_hours": 6.000063507528717,
+  "norm_return": 0.8166440725326538,
+  "task_norm_return": 0.8500865697860718,
+  "macro_success_rate": 0.9153439005215963,
+  "success_rate": 0.9634702801704407,
+  "completion_fraction": 0.9880469441413879,
+  "failure_causes": {
+    "robot_height": 0,
+    "robot_tilt": 3,
+    "box_position": 0,
+    "box_drop": 13,
+    "box_below_floor": 0
+  },
+  "per_stage": {
+    "01_approach_lift": {
+      "clips": 21,
+      "norm_return": 0.7351261973381042,
+      "task_norm_return": 0.7764949202537537,
+      "fail_rate": 0.2539682686328888,
+      "success_rate": 0.7460317015647888,
+      "box_drop_count": 13,
+      "completion_fraction": 0.9168977737426758,
+      "mean_object_error_m": 0.02649128995835781
+    },
+    "02_carry_move": {
+      "clips": 75,
+      "norm_return": 0.8033574819564819,
+      "task_norm_return": 0.8433570861816406,
+      "fail_rate": 0.0,
+      "success_rate": 1.0,
+      "box_drop_count": 0,
+      "completion_fraction": 1.0,
+      "mean_object_error_m": 0.09673161804676056
+    },
+    "03_lower_place": {
+      "clips": 50,
+      "norm_return": 0.8708115816116333,
+      "task_norm_return": 0.8910893201828003,
+      "fail_rate": 0.0,
+      "success_rate": 1.0,
+      "box_drop_count": 0,
+      "completion_fraction": 1.0,
+      "mean_object_error_m": 0.044221989810466766
+    }
+  },
+  "pooled_gait": {
+    "seconds": 2545.28,
+    "rollouts": 438,
+    "extra": 2440,
+    "extra_per_minute": 57.51822982147347,
+    "missed_steps": 896,
+    "repeated_same_foot": 140
+  },
+  "release_stability": {
+    "rollouts_reaching_release": 150,
+    "released_steps": 9072,
+    "mean_speed_m_s": 0.013662703335285187,
+    "mean_object_error_m": 0.052229661494493484,
+    "reference_window_coverage": {
+      "complete": 18,
+      "partial": 1,
+      "unknown": 31
+    }
+  },
+  "mean_object_error_m": 0.06864580512046814
+}

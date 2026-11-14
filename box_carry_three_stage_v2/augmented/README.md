@@ -1,16 +1,7 @@
-# 搬箱数据入口
+# 三阶段搬箱数据入口
 
-清单共 1000 条 50 Hz 增强片段：748 train、146 val、106 test。
-阶段为 01_approach_lift、02_carry_move、03_lower_place。
+本分支只提供最新裁剪数据的清单，NPZ 原始轨迹需另行准备。按 manifest 中相对路径放到本目录，或用 `--motion_dir /path/to/augmented` 指定现有数据。
 
-manifest.csv 的 clip_npz 相对本目录解析。准备对应 NPZ 文件并保留：
+748 条 train、146 条 val、106 条 test，共 1000 条片段、297400 帧。清单对应 teacher_025845 使用的数据。观测、控制与参考均以 50 Hz 处理；不得混用裁剪前帧号。
 
-- 01_approach_lift/train|val|test/*.npz
-- 02_carry_move/train|val|test/*.npz
-- 03_lower_place/train|val|test/*.npz
-
-NPZ 数据需从原数据集取得；本仓库提供清单和代码。
-加载、关节映射、FK、接触、箱体/桌面以及站立高度字段见 ../../src/blinkmimic/box_carry.py。
-复制原 augmented 入口时，需解析 NPZ 符号链接或保留其指向的原目录。
-
-数据保留 2026-11-11 开局 init 清理结果；改变片段内容或帧起点会改变报告中的评估结果。
+数据文件与清单指纹见 `../../checkpoints/teacher_025845/MODEL_CARD.json`。NPZ 格式由 `src/blinkmimic/box_carry.py` 的 `CarryMotionLib` 读取；包含机器人、箱体、手部接触、阶段及支撑表面信息。机器人资产已提供在 `data/g1_carry`。

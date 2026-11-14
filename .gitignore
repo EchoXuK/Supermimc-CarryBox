@@ -9,9 +9,9 @@ dist/
 *.egg-info/
 logs/
 *.pt
-!/checkpoints/amp_seed0_2h/best_policy.pt
+!/checkpoints/teacher_025845/policy.pt
+!/checkpoints/teacher_025845/full_training.pt
 *.onnx
-!/checkpoints/amp_seed0_2h/representative_policy.onnx
 *.npz
 *.mp4
 *.pdf

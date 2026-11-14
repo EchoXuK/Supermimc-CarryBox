@@ -1,0 +1,184 @@
+{
+  "model": "Pure BlinkMimic/BPTT G1 carry-box teacher",
+  "iteration": 25845,
+  "best_and_final": true,
+  "seed": 0,
+  "training_seconds": 21600.22862710338,
+  "real_environment_transitions": 562661376,
+  "actor": "Policy",
+  "deployment_policy": "EMA",
+  "vision": "latent",
+  "visual_dim": 32,
+  "horizon": 48,
+  "bptt_seconds": 0.96,
+  "goal_frame_offsets": "1,5,10,15,20,25,30,35,40,45",
+  "reference_seconds": 0.9,
+  "carry_reward_profile": "grasp_place_reach",
+  "carry_gait_profile": "reference_phase_v3",
+  "checkpoint_files": {
+    "full_training.pt": {
+      "sha256": "c9ef7d3c41f82782b1e895fbc15e6295d0d015c65f69d62efe9ea12c7ee384a6",
+      "bytes": 48221135
+    },
+    "policy.pt": {
+      "sha256": "835f58d040fd5ae3cb9d66d1d405787d71634f861a97c4144ab73f72cb337581",
+      "bytes": 21162133
+    }
+  },
+  "policy_contents": "deployed/live actor, world model and run metadata",
+  "full_training_contents": "deployed/live actor, world model, critic, vision, EMA, all optimizers and training counters; replay recollected on resume",
+  "dataset": {
+    "splits": {
+      "train": 748,
+      "val": 146,
+      "test": 106
+    },
+    "frames": 297400,
+    "fingerprint": "e917b80c19d5603b7c04293aa0b325ebf14d79e74c0f93575bc7501266a70579",
+    "manifest_sha256": "12d0d72a81b563109d49f0edcee5c416b4b80000d19104e521fd494e04d04bc4",
+    "npz_included": false
+  },
+  "provenance": {
+    "training_source_status": "original historical training snapshot deleted at user request; not recreated",
+    "released_source": "post-cleanup pure BPTT source, validated with identical CPU actions/rewards and original weight tensor bytes",
+    "evaluation_results": "historical measurements on the same cropped data; deployment verification separately recorded in results/teacher_025845/release_validation.json"
+  },
+  "validation": {
+    "split": "val",
+    "iteration": 25845,
+    "training_hours": 6.000063507528717,
+    "norm_return": 0.8166440725326538,
+    "task_norm_return": 0.8500865697860718,
+    "macro_success_rate": 0.9153439005215963,
+    "success_rate": 0.9634702801704407,
+    "completion_fraction": 0.9880469441413879,
+    "failure_causes": {
+      "robot_height": 0,
+      "robot_tilt": 3,
+      "box_position": 0,
+      "box_drop": 13,
+      "box_below_floor": 0
+    },
+    "per_stage": {
+      "01_approach_lift": {
+        "clips": 21,
+        "norm_return": 0.7351261973381042,
+        "task_norm_return": 0.7764949202537537,
+        "fail_rate": 0.2539682686328888,
+        "success_rate": 0.7460317015647888,
+        "box_drop_count": 13,
+        "completion_fraction": 0.9168977737426758,
+        "mean_object_error_m": 0.02649128995835781
+      },
+      "02_carry_move": {
+        "clips": 75,
+        "norm_return": 0.8033574819564819,
+        "task_norm_return": 0.8433570861816406,
+        "fail_rate": 0.0,
+        "success_rate": 1.0,
+        "box_drop_count": 0,
+        "completion_fraction": 1.0,
+        "mean_object_error_m": 0.09673161804676056
+      },
+      "03_lower_place": {
+        "clips": 50,
+        "norm_return": 0.8708115816116333,
+        "task_norm_return": 0.8910893201828003,
+        "fail_rate": 0.0,
+        "success_rate": 1.0,
+        "box_drop_count": 0,
+        "completion_fraction": 1.0,
+        "mean_object_error_m": 0.044221989810466766
+      }
+    },
+    "pooled_gait": {
+      "seconds": 2545.28,
+      "rollouts": 438,
+      "extra": 2440,
+      "extra_per_minute": 57.51822982147347,
+      "missed_steps": 896,
+      "repeated_same_foot": 140
+    },
+    "release_stability": {
+      "rollouts_reaching_release": 150,
+      "released_steps": 9072,
+      "mean_speed_m_s": 0.013662703335285187,
+      "mean_object_error_m": 0.052229661494493484,
+      "reference_window_coverage": {
+        "complete": 18,
+        "partial": 1,
+        "unknown": 31
+      }
+    },
+    "mean_object_error_m": 0.06864580512046814
+  },
+  "test": {
+    "split": "test",
+    "iteration": 25845,
+    "training_hours": 6.000063507528717,
+    "norm_return": 0.8142889738082886,
+    "task_norm_return": 0.8426774144172668,
+    "macro_success_rate": 0.9450496037801107,
+    "success_rate": 0.9433962106704712,
+    "completion_fraction": 0.9781323075294495,
+    "failure_causes": {
+      "robot_height": 0,
+      "robot_tilt": 0,
+      "box_position": 2,
+      "box_drop": 16,
+      "box_below_floor": 0
+    },
+    "per_stage": {
+      "01_approach_lift": {
+        "clips": 17,
+        "norm_return": 0.8149010539054871,
+        "task_norm_return": 0.8518410325050354,
+        "fail_rate": 0.0784313753247261,
+        "success_rate": 0.9215685725212097,
+        "box_drop_count": 4,
+        "completion_fraction": 0.9770349860191345,
+        "mean_object_error_m": 0.018674785271286964
+      },
+      "02_carry_move": {
+        "clips": 54,
+        "norm_return": 0.7843306660652161,
+        "task_norm_return": 0.8147450089454651,
+        "fail_rate": 0.08641976118087769,
+        "success_rate": 0.9135802388191223,
+        "box_drop_count": 12,
+        "completion_fraction": 0.9643042087554932,
+        "mean_object_error_m": 0.08636258542537689
+      },
+      "03_lower_place": {
+        "clips": 35,
+        "norm_return": 0.8602134585380554,
+        "task_norm_return": 0.88132244348526,
+        "fail_rate": 0.0,
+        "success_rate": 1.0,
+        "box_drop_count": 0,
+        "completion_fraction": 1.0,
+        "mean_object_error_m": 0.051985230296850204
+      }
+    },
+    "pooled_gait": {
+      "seconds": 1603.3200000000002,
+      "rollouts": 318,
+      "extra": 1451,
+      "extra_per_minute": 54.29982785719631,
+      "missed_steps": 336,
+      "repeated_same_foot": 98
+    },
+    "release_stability": {
+      "rollouts_reaching_release": 105,
+      "released_steps": 5772,
+      "mean_speed_m_s": 0.008253627456724644,
+      "mean_object_error_m": 0.06292770802974701,
+      "reference_window_coverage": {
+        "complete": 14,
+        "partial": 1,
+        "unknown": 20
+      }
+    },
+    "mean_object_error_m": 0.06415598094463348
+  }
+}

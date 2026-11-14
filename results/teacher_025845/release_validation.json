@@ -1,0 +1,25 @@
+{
+  "regression_cases_all_passed": 100,
+  "cpu_passed": 95,
+  "gpu_passed": 5,
+  "reference_frames_checked": 297400,
+  "checkpoint_migration": {
+    "physical_files": 209,
+    "model_and_optimizer_tensors_exact": true
+  },
+  "deployed_model_cpu_actions_exact": true,
+  "deployed_model_rewards_exact": true,
+  "onnx_atol": 0.0001,
+  "onnx_rtol": 0.0001,
+  "onnx_max_action_abs_error": 6.08e-06,
+  "compiled_actor_updates": 3,
+  "resumed_actor_updates": 2,
+  "all_model_and_optimizer_tensors_finite": true,
+  "module_update_l2": {
+    "actor": 0.07555381880868275,
+    "world_model": 0.059693372991138034,
+    "critic": 0.17733971540926416,
+    "depth_encoder": 0.06251305104731356,
+    "latent_decoder": 0.06715928503870344
+  }
+}

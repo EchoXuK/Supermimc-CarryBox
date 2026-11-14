@@ -20,9 +20,28 @@ BIN_FRAMES = 50  # 1 s bins for return-based reset sampling
 GOAL_Q_OFFSET = 15  # index of the joint positions q(f+1) in the goal vector (first future frame: dp 3, rot 6, v 3, w 3, then q)
 
 
+def goal_frame_offsets(options: dict) -> tuple[int, ...]:
+    """Resolve checkpoint sampling; absent metadata preserves the original dense preview."""
+    K = options.get("goal_frames", 10)
+    offsets = options.get("goal_frame_offsets")
+    if offsets is None:
+        return tuple(range(1, K + 1))
+    if isinstance(offsets, str):
+        offsets = tuple(int(v) for v in offsets.split(","))
+    else:
+        offsets = tuple(offsets)
+    if len(offsets) != K or any(type(v) is not int or v < 1 for v in offsets):
+        raise ValueError("goal_frame_offsets must contain goal_frames positive integer offsets")
+    if tuple(sorted(set(offsets))) != offsets or offsets[0] != 1:
+        raise ValueError("goal_frame_offsets must increase strictly and start at 1 (the PD reference skip)")
+    return offsets
+
+
 class MotionLib:
     def __init__(self, files: list[str], kin: Kinematics, device: str, load_motion: Callable[[str], MotionArrays]):
         self.device = device
+        self.goal_offsets = None
+        self.files = list(files)
         self.names = [os.path.splitext(os.path.basename(f))[0] for f in files]
         if not files:
             raise ValueError("No reference motions found")
@@ -109,22 +128,47 @@ class MotionLib:
             floor[s] = z[s].quantile(q, dim=0)
         self.ref_contact = ((z < floor + margin) & (vh < vmax)).float()
 
+    def reset_sampling(self, min_steps: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Exclusive reset bounds and uniform-time priors with each clip's mass preserved.
+
+        A 33-frame clip has one eligible start when min_steps=32. Cropping
+        can leave a one-frame final bin; it must not receive a 50-frame
+        bin's prior mass. The legacy sampler does not call this method.
+        """
+        if min_steps < 1 or bool((self.clip_len <= min_steps).any()):
+            raise ValueError("min_reset_steps must be positive and smaller than every reference clip")
+        end = torch.minimum(self.bin_start + BIN_FRAMES,
+                            self.clip_end[self.bin_clip] - min_steps + 1)
+        span = (end - self.bin_start).clamp(min=0).float()
+        base = getattr(self, "bin_prior", torch.ones_like(span) / self.num_bins)
+        mass = span.new_zeros(len(self.clip_len)).index_add_(0, self.bin_clip, base)
+        frames = span.new_zeros(len(self.clip_len)).index_add_(0, self.bin_clip, span)
+        prior = mass[self.bin_clip] * span / frames[self.bin_clip]
+        return end, prior
+
     def goal_dim(self, K: int) -> int:
         return K * (3 + 6 + 3 + 3 + 2 * self.q.shape[-1])
 
     def future_frames(self, f: torch.Tensor, K: int) -> torch.Tensor:
-        """Frames f+1..f+K clamped to the clip's last frame, shape (B, K)."""
+        """Checkpoint-configured offsets, clamped inside each clip, shape (B, K)."""
         end = self.clip_end[self.clip_id[f]]
-        fut = f.unsqueeze(-1) + torch.arange(1, K + 1, device=f.device)
+        offsets = self.goal_offsets
+        if offsets is None:
+            offsets = torch.arange(1, K + 1, device=f.device)
+        elif len(offsets) != K:
+            raise ValueError("Configured reference offsets do not match goal_frames")
+        fut = f.unsqueeze(-1) + offsets
         return torch.minimum(fut, end.unsqueeze(-1))
 
-    def goal(self, f: torch.Tensor, K: int, root_p: torch.Tensor | None = None) -> torch.Tensor:
-        """Future targets in reference-yaw axes, optionally relative to the live robot's position."""
+    def configure_goal_sampling(self, options: dict) -> None:
+        self.goal_offsets = torch.tensor(goal_frame_offsets(options), dtype=torch.long, device=self.device)
+
+    def goal(self, f: torch.Tensor, K: int) -> torch.Tensor:
+        """Goal features from the reference only: K future frames relative to the current reference frame."""
         fut = self.future_frames(f, K)  # (B,K)
         H = yaw_mat(self.root_R[f])  # (B,3,3)
         Ht = H.transpose(-1, -2).unsqueeze(1)
-        origin = self.root_p[f] if root_p is None else root_p
-        dp = mv3(Ht, self.root_p[fut] - origin.unsqueeze(1))
+        dp = mv3(Ht, self.root_p[fut] - self.root_p[f].unsqueeze(1))
         rot = mat_to_6d(mm3(Ht, self.root_R[fut]))
         feats = torch.cat(
             (dp, rot, self.root_v_local[fut], self.root_w_local[fut], self.q[fut], self.qd[fut] * 0.1), -1

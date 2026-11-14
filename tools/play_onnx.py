@@ -56,8 +56,12 @@ def main():
     kin = Kinematics(robot, dev)
     motion = (CarryMotionLib.from_file(a.motion, robot, kin, dev) if task == "box_carry" else
               MotionLib([a.motion], kin, dev, robot.load_motion))
+    motion.configure_goal_sampling({"goal_frames": int(meta["goal_frames"]),
+                                    "goal_frame_offsets": meta.get("goal_frame_offsets")})
     mdp_cls = CarryMDP if task == "box_carry" else MDP
-    mdp = mdp_cls(kin, motion, torch.tensor(robot.default_joint_pos_list(), device=dev), XiLayout(robot, dev).dim, robot.sensing)
+    reward_options = {"reward_profile": meta.get("carry_reward_profile", "legacy")} if task == "box_carry" else {}
+    mdp = mdp_cls(kin, motion, torch.tensor(robot.default_joint_pos_list(), device=dev),
+                  XiLayout(robot, dev).dim, robot.sensing, **reward_options)
     env = TrackingSim(make_sim(robot), 1, robot, motion, mdp, dev, eval_mode=True, vision=visual)
     env.done_eval[:] = False
     env.failed_eval[:] = False
@@ -80,8 +84,6 @@ def main():
         feed = {"obs_history": hist[None], "time_step": np.array([[float(env.f.item())]], dtype=np.float32)}
         if visual:
             feed["depth"] = env.depth.cpu().numpy()
-        if meta.get("carry_goal_anchor", "reference") == "robot":
-            feed["root_pos_w"] = env.state()[0].cpu().numpy()
         out = dict(zip([x.name for x in sess.get_outputs()], sess.run(None, feed)))
         act = out["actions"][0]
         alive = not bool(env.done_eval.item())

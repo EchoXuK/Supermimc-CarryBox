@@ -89,41 +89,6 @@ class ReplayBuffer:
         size = self.size_t if self.size_t is not None else self.size
         return (ptr - size + age) % self.T
 
-    def sample_transitions(self, B: int):
-        """Recorded pre-reset pairs, including genuine terminal transitions."""
-        age = self._randint(self.size_t if self.size_t is not None else self.size, B)
-        env = torch.randint(0, self.N, (B,), device=self.device)
-        row = self._row(age)
-        return {key: self.data[key][row, env] for key in ("s", "s1", "f")}
-
-    def horizon_start_weights(self, motion, horizon: int):
-        """Eligible stored states; an all-zero result means collection must continue."""
-        size = self.size_t if self.size_t is not None else self.size
-        f = self.data["f"]
-        valid = f + horizon <= motion.clip_end[motion.clip_id[f]]
-        valid = valid & (torch.arange(self.T, device=self.device)[:, None] < size)
-        return valid.flatten().float()
-
-    def sample_horizon_starts(self, B: int, hist: int, motion, horizon: int, weights=None):
-        """Uniform stored states with a full within-clip imagination horizon.
-
-        Sampling from the eligible rows directly also handles short carry clips;
-        a fixed candidate batch cannot guarantee enough valid starts for them.
-
-        With no eligible states, return (None, None). A caller supplying weights
-        must check them before entering a CUDA graph.
-        """
-        if weights is None:
-            weights = self.horizon_start_weights(motion, horizon)
-            if not bool(weights.any()):
-                return None, None
-        size = self.size_t if self.size_t is not None else self.size
-        ptr = self.ptr_t if self.ptr_t is not None else self.ptr
-        index = torch.multinomial(weights, B, replacement=True)
-        row, env = index // self.N, index % self.N
-        age = (row - (ptr - size)) % self.T
-        return self.starts_at(age, env, hist)
-
     def sample_windows(self, B: int, k: int):
         """k-step windows; returns dict of (B, k, ...) tensors and a validity mask (B, k)."""
         t0 = self._randint((self.size_t if self.size_t is not None else self.size) - k + 1, B)

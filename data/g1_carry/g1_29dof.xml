@@ -5,7 +5,7 @@
   <default>
     <joint damping="0.001" armature="0.01" frictionloss="0.1"/>
   </default>
-  <option timestep="0.002"/>
+  <option timestep="0.002"/> 
   <option integrator="implicit"/>
 
   <asset>
@@ -288,7 +288,7 @@
     <gyro name="imu-pelvis-angular-velocity" site="imu_in_pelvis" noise="5e-4" cutoff="34.9"/>
     <accelerometer name="imu-pelvis-linear-acceleration" site="imu_in_pelvis" noise="1e-2" cutoff="157"/>
 
-    <!-- Lidar -->
+    <!-- Lidar -->  
     <framepos name="mid360_link_pos" objtype="site" objname="mid360_link" />
     <framequat name="mid360_link_quat" objtype="site" objname="mid360_link" />
   </sensor>

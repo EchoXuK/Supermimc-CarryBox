@@ -1,7 +1,0 @@
-{
-  "iteration": 20869,
-  "training_wall_seconds": 7200.127604961395,
-  "complete": true,
-  "amp_updates": 20869,
-  "all_model_and_optimizer_tensors_finite": true
-}
