@@ -13,6 +13,7 @@ logs/
 !/checkpoints/teacher_025845/full_training.pt
 *.onnx
 *.npz
+!box_carry_three_stage_v2/augmented/**/*.npz
 *.mp4
 *.pdf
 data/*

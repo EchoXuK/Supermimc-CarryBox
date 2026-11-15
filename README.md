@@ -8,7 +8,7 @@
 
 - 普通 Policy + 世界模型 + BPTT Actor + 想象轨迹 λ-return Critic，使用深度 latent 和下一帧参考 PD 跳连。
 - 控制周期 0.02 秒；历史模型使用 **48 步 BPTT（0.96 秒）**、最远 0.9 秒未来参考。十个参考偏移：`1,5,10,15,20,25,30,35,40,45`。
-- 最新裁剪数据：748 train / 146 val / 106 test，共 297400 帧；NPZ 需另行准备，[清单与格式](box_carry_three_stage_v2/augmented/README.md) 已提供。
+- 最新裁剪数据：748 train / 146 val / 106 test，共 297400 帧；NPZ 已通过 Git LFS 随分支提供，[清单与格式](box_carry_three_stage_v2/augmented/README.md) 已提供。
 - 奖励为 `grasp_place_reach` 与 `reference_phase_v3`，额外动作平滑关闭。相位和箱体目标仍由专家参考提供，此模型需要参考轨迹条件。
 
 历史验证集三阶段平均成功率 **91.53%**，测试集 **94.50%**；测试原任务回报 **0.8427**。这些是独立片段结果，步态抖动和同脚重复点地仍可能出现。分阶段数值见 [验证](results/teacher_025845/validation_historical.json) 和 [测试](results/teacher_025845/test_historical.json)。
@@ -16,6 +16,11 @@
 ## 安装与权重校验
 
 ```bash
+# 先安装系统 git-lfs；克隆后在仓库根目录执行
+git lfs install
+git lfs pull
+(cd box_carry_three_stage_v2/augmented && sha256sum -c SHA256SUMS)
+
 python3.12 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install --extra-index-url https://download.pytorch.org/whl/cu128 -r requirements-tested.txt
@@ -33,12 +38,12 @@ python3.12 -m venv .venv
 CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src .venv/bin/python -m blinkmimic.evaluate \
   --run_dir checkpoints/teacher_025845 \
   --ckpt checkpoints/teacher_025845/policy.pt \
-  --motion_dir /path/to/augmented --split test --repeats 3 \
+  --motion_dir box_carry_three_stage_v2/augmented --split test --repeats 3 \
   --output results/teacher_025845/new_test_eval.json
 
 PYTHONPATH=src .venv/bin/python tools/export_onnx.py \
   --ckpt checkpoints/teacher_025845/policy.pt \
-  --motion /path/to/one_clip.npz --out teacher.onnx
+  --motion "$(find box_carry_three_stage_v2/augmented -name '*.npz' -print -quit)" --out teacher.onnx
 ```
 
 `--max_clips 3` 可用于三阶段各一条的冒烟评估。评估与 ONNX 均从权重读取参考偏移，避免将历史模型误按默认采样读取。
@@ -49,7 +54,7 @@ PYTHONPATH=src .venv/bin/python tools/export_onnx.py \
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 PRESET_NAME=box_carry bash scripts/train.sh logs/teacher_new \
-  --motion_dir /path/to/augmented --seed 0 \
+  --motion_dir box_carry_three_stage_v2/augmented --seed 0 \
   --horizon 48 --min_imagination_steps 32 --min_reset_steps 32 \
   --pi_opt adam --wm_opt muon --lr 4e-4 --constant_lr \
   --carry_reward_profile grasp_place_reach --carry_gait_profile reference_phase_v3 \

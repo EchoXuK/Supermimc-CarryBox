@@ -1,0 +1,15 @@
+{
+  "files": 1000,
+  "split_counts": {
+    "test": 106,
+    "train": 748,
+    "val": 146
+  },
+  "frames": 297400,
+  "bytes": 629969550,
+  "training_snapshot_sha256_matches": true,
+  "source_manifest_matches": true,
+  "published_symlinks": 0,
+  "fingerprint": "e917b80c19d5603b7c04293aa0b325ebf14d79e74c0f93575bc7501266a70579",
+  "storage": "Git LFS"
+}

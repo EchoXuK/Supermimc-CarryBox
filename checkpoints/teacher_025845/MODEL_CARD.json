@@ -36,7 +36,10 @@
     "frames": 297400,
     "fingerprint": "e917b80c19d5603b7c04293aa0b325ebf14d79e74c0f93575bc7501266a70579",
     "manifest_sha256": "12d0d72a81b563109d49f0edcee5c416b4b80000d19104e521fd494e04d04bc4",
-    "npz_included": false
+    "npz_included": true,
+    "storage": "Git LFS",
+    "total_bytes": 629969550,
+    "checksums": "box_carry_three_stage_v2/augmented/SHA256SUMS"
   },
   "provenance": {
     "training_source_status": "original historical training snapshot deleted at user request; not recreated",
